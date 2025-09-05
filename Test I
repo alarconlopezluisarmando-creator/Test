@@ -1,1 +1,7 @@
-I need to a query where...
+I need to create a gant diagram for the below table. Due date is September 11 and I need.
+I need find the data that Im using, create a mappaing for this data, create a report/dashboard, create a ETL in alterxy and publish the report. 
+Report Name	Owner	OV Support	ETL	Due date
+Viaero Work Plan-SD	Luis	Alex	Maria	11-Sep
+Viaero MAT Template	Sara	Alex	Maria	11-Sep
+Conflict Report	Jannat/Jacy	Alex	Maria	11-Sep
+
