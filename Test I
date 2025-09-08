@@ -117,3 +117,67 @@ with pd.ExcelWriter(output_filename) as writer:
     df_monthly.to_excel(writer, sheet_name="Monthly Summary", index=False)
 
 print(f"Report successfully created: {output_filename}")
+
+
+V2
+
+import pandas as pd
+from datetime import datetime
+
+# Define the file path
+file_path = r"\\netapp\depts\Jannat\Viaero\YourFileName.xlsx"  # Replace 'YourFileName.xlsx' with the actual file name
+
+# Read the data from the file
+# If the file is an Excel file
+try:
+    df = pd.read_excel(file_path)
+except FileNotFoundError:
+    print(f"Error: File not found at {file_path}")
+    exit(1)
+except Exception as e:
+    print(f"Error reading file: {e}")
+    exit(1)
+
+# Drop the 'Milestone' column if it exists
+if 'Milestone' in df.columns:
+    df = df.drop(columns=['Milestone'])
+
+# Define the start and end dates
+start_date = datetime.today()
+end_date = datetime(2026, 8, 1)
+
+# Generate weekly dates
+weeks = pd.date_range(start=start_date, end=end_date, freq="W-MON")
+
+# Create a DataFrame for weeks and months
+df_weeks = pd.DataFrame({
+    "Week Start Date": weeks,
+    "Month": weeks.to_series().dt.to_period("M"),
+    "Week Number": range(1, len(weeks) + 1)
+})
+
+# Merge the original data with weeks
+df_report = pd.merge(df.assign(key=1), df_weeks.assign(key=1), on="key").drop(columns=["key"])
+
+# Add cumulative rows
+cumulative_data = []
+for (weekly, f_a, task_name, new_name), group in df_report.groupby(["Weekly", "F/A", "Task Name", "New Name"]):
+    group = group.copy()
+    group["Cumulative"] = group["Week Number"].cumsum()
+    cumulative_data.append(group)
+
+df_cumulative = pd.concat(cumulative_data)
+
+# Create a monthly summary
+df_monthly = df_cumulative.groupby(["Weekly", "F/A", "Task Name", "New Name", "Month"]).size().reset_index(name="Count")
+df_monthly["Cumulative Count"] = df_monthly.groupby(["Weekly", "F/A", "Task Name", "New Name"])["Count"].cumsum()
+
+# Write to Excel
+output_filename = "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
+try:
+    with pd.ExcelWriter(output_filename) as writer:
+        df_cumulative.to_excel(writer, sheet_name="Weekly Breakdown", index=False)
+        df_monthly.to_excel(writer, sheet_name="Monthly Summary", index=False)
+    print(f"Report successfully created: {output_filename}")
+except Exception as e:
+    print(f"Error writing to Excel: {e}")
