@@ -1,7 +1,77 @@
-I need to create a gant diagram for the below table. Due date is September 11 and I need.
-I need find the data that Im using, create a mappaing for this data, create a report/dashboard, create a ETL in alterxy and publish the report. 
-Report Name	Owner	OV Support	ETL	Due date
-Viaero Work Plan-SD	Luis	Alex	Maria	11-Sep
-Viaero MAT Template	Sara	Alex	Maria	11-Sep
-Conflict Report	Jannat/Jacy	Alex	Maria	11-Sep
+I have below code but is not working.
+
+After run, I got below error:
+
+Database engine created successfully.
+Failed to read Excel file: Missing optional dependency 'openpyxl'.  Use pip or conda to install openpyxl.
+An error occurred: Error reading Excel file from path: \\netapp\depts\Jannat\SNAP\OV\Viaero\Power plant_report.xlsx
+
+code was working propertly before, the only change tath I did was add a new column called "updated"
+
+Could you help me?
+
+import pandas as pd
+from sqlalchemy import create_engine
+import pyodbc
+from datetime import datetime
+
+# Database configuration
+DB_SERVER = '105.52.12.43'
+DB_PORT = '1433'
+DB_DATABASE = 'ViaeroDWH'
+DB_USER = 'RFTool_User'
+DB_PASSWORD = 'samsung@2024!'
+DB_DRIVER = '{ODBC Driver 17 for SQL Server}'
+
+# Excel file configuration
+FILE_PATH = r'\\netapp\depts\Jannat\SNAP\OV\Viaero\Power plant_report.xlsx'
+TABLE_NAME = 'Power_Plant'
+
+def create_database_engine():
+    connection_string = (
+        f'mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_SERVER}:{DB_PORT}/{DB_DATABASE}'
+        f'?driver={DB_DRIVER.replace("{", "").replace("}", "")}'
+    )
+    try:
+        engine = create_engine(connection_string)
+        print("Database engine created successfully.")
+        return engine
+    except Exception as exc:
+        print(f"Failed to create database engine: {exc}")
+        print("Please verify the database credentials and configuration.")
+        raise Exception("Database connection failed.")
+
+def read_excel_file(file_path):
+    try:
+        df = pd.read_excel(file_path, engine='openpyxl')
+        print(f"Successfully read data from {file_path}")
+        return df
+    except Exception as exc:
+        print(f"Failed to read Excel file: {exc}")
+        raise Exception(f"Error reading Excel file from path: {file_path}")
+
+def insert_data_into_sql_table(engine, df, table_name):
+    try:
+        # Add the 'updated' column with the current timestamp
+        df['updated'] = datetime.now()
+        
+        # Insert the DataFrame into the SQL table
+        # if_exists='replace' will drop the table and re-create it on each run.
+        # This will preserve the current timestamp for all rows.
+        df.to_sql(table_name, engine, index=False, if_exists='replace')
+        print(f"Data successfully inserted into the '{table_name}' table with timestamp.")
+    except Exception as exc:
+        print(f"Database insertion failed: {exc}")
+        raise Exception(f"Error inserting data into the '{table_name}' table.")
+
+def main():
+    try:
+        engine = create_database_engine()
+        df = read_excel_file(FILE_PATH)
+        insert_data_into_sql_table(engine, df, TABLE_NAME)
+    except Exception as exc:
+        print(f"An error occurred: {exc}")
+
+if __name__ == "__main__":
+    main()
 
