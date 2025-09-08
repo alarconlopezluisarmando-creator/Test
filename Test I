@@ -55,3 +55,65 @@ A&E Site Walks	Forecast	1120	 Site Audit Walk Package Received-Finish	Pre-Con - 
 	Actual			Pre-Con - Site Walk (Cumulative)	50	50	50	50	50	50	50	50	50	50	105	150	195	195	195	195	195	195
 
 7.all this code need to be deploy in python and the final result need to be an excel named "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
+
+Code to implement:
+
+import pandas as pd
+from datetime import datetime, timedelta
+
+# Define the data
+data = [
+    {"Weekly": "A&E Site Walks", "F/A": "Forecast", "Task Name": "V:(F 1120) Site Audit Walk Package Received-Finish", "New Name": "Pre-Con - Site Walk"},
+    {"Weekly": "A&E Site Walks", "F/A": "Actual", "Task Name": "V:(A 1120) Site Audit Walk Package Received-Finish", "New Name": "Pre-Con - Site Walk"},
+    {"Weekly": "A&E Lease Exhibit", "F/A": "Forecast", "Task Name": "V:(F 1125) Ground Cabling BOM Received-Finish", "New Name": "Pre-Con - Cable BOM and LE"},
+    {"Weekly": "A&E Lease Exhibit", "F/A": "Actual", "Task Name": "V:(A 1125) Ground Cabling BOM Received-Finish", "New Name": "Pre-Con - Cable BOM and LE"},
+    {"Weekly": "Final Dwgs", "F/A": "Forecast", "Task Name": "V:(F 1146) 100% Construction Drawing Received-Finish", "New Name": "Pre-Con - Final Drawings"},
+    {"Weekly": "Final Dwgs", "F/A": "Actual", "Task Name": "V:(A 1146) 100% Construction Drawing Received-Finish", "New Name": "Pre-Con - Final Drawings"},
+    {"Weekly": "BMS1 SVCS rev rec", "F/A": "Forecast", "Task Name": "V:(F 1360) Billing Milestone 1 Complete-Finish", "New Name": "Pre-Con - Ms1 Rev Rec"},
+    {"Weekly": "BMS1 SVCS rev rec", "F/A": "Actual", "Task Name": "V:(A 1360) Billing Milestone 1 Complete-Finish", "New Name": "Pre-Con - Ms1 Rev Rec"},
+    {"Weekly": "BMS2 Cx Complete", "F/A": "Forecast", "Task Name": "V:(F 3460) Ground Construction Complete-Finish", "New Name": "BBU - Ground Install (sites)"},
+    {"Weekly": "BMS2 Cx Complete", "F/A": "Actual", "Task Name": "V:(A 3460) Ground Construction Complete-Finish", "New Name": "BBU - Ground Install (sites)"},
+    {"Weekly": "BMS3 Cx Start", "F/A": "Forecast", "Task Name": "V:(F 3340) Tower Construction Start-Finish", "New Name": "RRH - Tower CxS"},
+    {"Weekly": "BMS3 Cx Start", "F/A": "Actual", "Task Name": "V:(A 3340) Tower Construction Start-Finish", "New Name": "RRH - Tower CxS"},
+]
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Define the start and end dates
+start_date = datetime.today()
+end_date = datetime(2026, 8, 1)
+
+# Generate weekly dates
+weeks = pd.date_range(start=start_date, end=end_date, freq="W-MON")
+
+# Create a DataFrame for weeks and months
+df_weeks = pd.DataFrame({
+    "Week Start Date": weeks,
+    "Month": weeks.to_series().dt.to_period("M"),
+    "Week Number": range(1, len(weeks) + 1)
+})
+
+# Merge the original data with weeks
+df_report = pd.merge(df.assign(key=1), df_weeks.assign(key=1), on="key").drop(columns=["key"])
+
+# Add cumulative rows
+cumulative_data = []
+for (weekly, f_a, task_name, new_name), group in df_report.groupby(["Weekly", "F/A", "Task Name", "New Name"]):
+    group = group.copy()
+    group["Cumulative"] = group["Week Number"].cumsum()
+    cumulative_data.append(group)
+
+df_cumulative = pd.concat(cumulative_data)
+
+# Create a monthly summary
+df_monthly = df_cumulative.groupby(["Weekly", "F/A", "Task Name", "New Name", "Month"]).size().reset_index(name="Count")
+df_monthly["Cumulative Count"] = df_monthly.groupby(["Weekly", "F/A", "Task Name", "New Name"])["Count"].cumsum()
+
+# Write to Excel
+output_filename = "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
+with pd.ExcelWriter(output_filename) as writer:
+    df_cumulative.to_excel(writer, sheet_name="Weekly Breakdown", index=False)
+    df_monthly.to_excel(writer, sheet_name="Monthly Summary", index=False)
+
+print(f"Report successfully created: {output_filename}")
