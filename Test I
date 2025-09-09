@@ -64,8 +64,9 @@ milestone_mapping = {
 }
 
 def extract_names(milestone_str):
-    match = re.search(r'V:\((F|A)\s\d{4}\)\s(.*)', milestone_str)
-    milestone_name = match.group(2) if match else milestone_str
+    # This regex is more robust, capturing the text after the year and ')'
+    match = re.search(r'\)\s(.*)', milestone_str)
+    milestone_name = match.group(1).strip() if match else milestone_str
     return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
 
 df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
@@ -108,6 +109,9 @@ monthly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
+
+# Sort the columns of the monthly report chronologically
+monthly_pivot = monthly_pivot.reindex(columns=monthly_pivot.columns.sort_values())
 final_monthly_report = monthly_pivot
 
 # --- Step 7: Write reports to multi-sheet Excel file ---
@@ -128,3 +132,4 @@ final_weekly_report_flat = final_weekly_report.reset_index()
 final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
+
