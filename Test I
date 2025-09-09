@@ -1,11 +1,16 @@
-I have below code but is not counting the dates like value. is give the same values for all the columns, and is not doing the second sheet that I requested. 
-
+The core issues with your code are that you're using df_unpivoted['Date_Count'] for your reports and that you're trying to pivot by too many columns, which results in the same value being repeated.
+To fix the issues, you need to count the occurrences of dates for each unique milestone and week, not the total count of non-empty dates for a milestone. This requires a different approach to your data aggregation. Also, you need to generate a single report that can be pivoted for both weekly and monthly views, rather than creating two separate, large pivot tables.
+Corrected Code
+The corrected code below addresses the problems by:
+ * Cleaning the date data in df_unpivoted.
+ * Counting milestones per week using a new Milestone_Count column.
+ * Creating a single, final report DataFrame by correctly merging and aggregating the data.
+ * Using a different approach for the second sheet, creating a summary table instead of a complex pivot.
+<!-- end list -->
 # Import libraries
 import pandas as pd
 from datetime import datetime
-from ayx import Package
 from ayx import Alteryx
-import re
 import warnings
 
 # Suppress the UserWarning from pandas about openpyxl
@@ -42,11 +47,8 @@ id_vars = [
 milestone_cols = [col for col in df.columns if col.startswith('V:(')]
 df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
 
-# --- Step 4: Extract required columns from unpivoted data ---
-def extract_f_a(milestone_str):
-    match = re.search(r'V:\((F|A)', milestone_str)
-    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
-
+# --- Step 4: Extract required columns and clean data ---
+import re
 milestone_mapping = {
     'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
     'Ground Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE'),
@@ -66,6 +68,10 @@ milestone_mapping = {
     'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec')
 }
 
+def extract_f_a(milestone_str):
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
 def extract_names(milestone_str):
     match = re.search(r'V:\((F|A)\s\d{4}\)\s(.*)', milestone_str)
     milestone_name = match.group(2) if match else milestone_str
@@ -75,13 +81,21 @@ df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
 df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda x: pd.Series(extract_names(x)))
 df_unpivoted['Weekly'] = df_unpivoted['New name']
 
-# --- Step 5: Count non-empty date values per milestone ---
-date_counts_list = []
-for col in milestone_cols:
-    date_count = pd.to_datetime(df[col], errors='coerce').notna().sum()
-    date_counts_list.append({'Milestone': col, 'Date_Count': date_count})
-df_date_counts = pd.DataFrame(date_counts_list)
-df_unpivoted = pd.merge(df_unpivoted, df_date_counts, on='Milestone', how='left')
+# Convert 'Status' column to datetime, forcing invalid dates to NaT
+df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
+
+# Drop rows where 'Status' is not a valid date
+df_unpivoted = df_unpivoted.dropna(subset=['Status'])
+
+# --- Step 5: Count milestones per week ---
+# Create 'Week Start Date' column from the 'Status' date
+df_unpivoted['Week Start Date'] = df_unpivoted['Status'].dt.to_period('W-MON').dt.start_time
+df_unpivoted['Milestone_Count'] = 1 # A simple count for each valid date
+
+# Aggregate the data to count milestones per week and per name
+df_aggregated = df_unpivoted.groupby(
+    ['Weekly', 'F/A', 'Task Name', 'Week Start Date']
+)['Milestone_Count'].sum().reset_index()
 
 
 # --- Step 6: Generate date ranges and merge with data ---
@@ -90,23 +104,37 @@ end_date = datetime(2026, 8, 1)
 weeks = pd.date_range(start=today, end=end_date, freq="W-MON")
 df_weeks = pd.DataFrame({
     "Week Start Date": weeks,
-    "Month": weeks.to_series().dt.to_period("M"),
     "Year": weeks.to_series().dt.year,
-    "Week Number": range(1, len(weeks) + 1),
-    "Month_Name": weeks.to_series().dt.strftime("%B")
+    "Month_Name": weeks.to_series().dt.strftime("%B"),
+    "Month_Year": weeks.to_series().dt.to_period("M"),
 })
 
-df_unpivoted['key'] = 1
-df_weeks['key'] = 1
-df_report = pd.merge(df_unpivoted, df_weeks, on="key").drop(columns=["key"])
+# Merge the aggregated data with the week ranges
+df_report = pd.merge(df_aggregated, df_weeks, on="Week Start Date", how="right").fillna(0)
 
-# --- Step 7: Create weekly and monthly reports (using Date_Count) ---
-# Weekly Report (Month by Month)
-weekly_pivot = df_report.groupby(["Weekly", "F/A", "Task Name", "New name", "Year", "Month_Name", "Week Number"])['Date_Count'].first().unstack(level=[4, 5, 6], fill_value=0)
+# The Milestone_Count is now 0 for weeks where there were no milestones
+df_report = df_report.astype({'Milestone_Count': int})
+
+# --- Step 7: Create weekly and monthly reports ---
+# Weekly Report
+weekly_pivot = pd.pivot_table(
+    df_report,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name'],
+    columns=['Week Start Date'],
+    fill_value=0
+)
 final_weekly_report = weekly_pivot
 
-# Monthly Report (Summary only)
-monthly_pivot = df_report.groupby(["Weekly", "F/A", "Task Name", "New name", "Year", "Month"])['Date_Count'].first().unstack(level=[4, 5], fill_value=0)
+# Monthly Report
+monthly_report = df_report.groupby(['Weekly', 'F/A', 'Task Name', 'Month_Year'])['Milestone_Count'].sum().reset_index()
+monthly_pivot = pd.pivot_table(
+    monthly_report,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name'],
+    columns=['Month_Year'],
+    fill_value=0
+)
 final_monthly_report = monthly_pivot
 
 # --- Step 8: Write reports to multi-sheet Excel file ---
@@ -120,10 +148,20 @@ except Exception as e:
     print(f"Error writing to Excel file: {e}")
 
 # --- Step 9: Pass a DataFrame back to Alteryx ---
+# Flatten the weekly report for Alteryx
 final_weekly_report_flat = final_weekly_report.reset_index()
-
-weekly_column_names = [f"{col[0]}_{col[1]}_{col[2]}" for col in final_weekly_report.columns]
-final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name', 'New name'] + weekly_column_names
+# Rename columns to a flat list for Alteryx
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [col.strftime('%Y-%m-%d') for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
 
+
+Key Changes and Explanations
+1. Counting Dates Correctly
+ * Original Code: Your Step 5 was counting all non-empty dates for a given milestone name and then repeating that same total count for every row in the unpivoted DataFrame.
+ * Corrected Code: The corrected code converts the Status column to a proper datetime object. It then calculates the Week Start Date for each entry and creates a new column called Milestone_Count with a value of 1.
+ * Aggregation: It then uses groupby() to sum Milestone_Count for each unique combination of 'Weekly', 'F/A', 'Task Name', and 'Week Start Date'. This gives you the number of milestones completed on a given week for a specific task, which is what you wanted to show in your report.
+2. Generating the Second Sheet
+ * Original Code: Your original code created a monthly report by using the same Date_Count value, which was incorrect and resulted in a confusing pivot table.
+ * Corrected Code: The corrected code creates a separate, simpler monthly_report DataFrame by aggregating the corrected df_report from Step 6. This new DataFrame correctly sums the Milestone_Count for each month, giving you a meaningful count for your monthly report. A pivot_table is then used to present the data clearly.
+This revised approach ensures that each count in your report represents the actual number of milestones completed within that specific time period (week or month) and that both sheets are populated correctly with meaningful data.
