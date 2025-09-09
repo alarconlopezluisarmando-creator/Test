@@ -1,183 +1,129 @@
-I have below columns in a file that I neede to reed from below path \\netapp\depts\Jannat\Viaero and I need to createa report with the next requirments:
+I have below code but is not counting the dates like value. is give the same values for all the columns, and is not doing the second sheet that I requested. 
 
-1. Please create a table like the next. But the milestone column need to be removed from the final file. 
-
-Milestone	Weekly	F/A	Task Name	New name
-V:(F 1120) Site Audit Walk Package Received-Finish	A&E Site Walks	Forecast	 Site Audit Walk Package Received-Finish	Pre-Con - Site Walk
-V:(A 1120) Site Audit Walk Package Received-Finish	A&E Site Walks	Actual	 Site Audit Walk Package Received-Finish	Pre-Con - Site Walk
-V:(F 1125) Ground Cabling BOM Received-Finish	A&E Lease Exhibit	Forecast	"Ground Cabling BOM Received-Finish
- Tower Cabling BOM Received-Finish"	Pre-Con - Cable BOM and LE
-V:(A 1125) Ground Cabling BOM Received-Finish	A&E Lease Exhibit	Actual	"Ground Cabling BOM Received-Finish
- Tower Cabling BOM Received-Finish"	Pre-Con - Cable BOM and LE
-V:(F 1127) Tower Cabling BOM Received-Finish	A&E Lease Exhibit	Forecast	"Ground Cabling BOM Received-Finish
- Tower Cabling BOM Received-Finish"	Pre-Con - Cable BOM and LE - Tower
-V:(A 1127) Tower Cabling BOM Received-Finish	A&E Lease Exhibit	Actual	"Ground Cabling BOM Received-Finish
- Tower Cabling BOM Received-Finish"	Pre-Con - Cable BOM and LE - Tower
-V:(F 1146) 100% Construction Drawing Received-Finish	Final Dwgs	Forecast	100% Construction Drawing Received-Finish	Pre-Con - Final Drawings
-V:(A 1146) 100% Construction Drawing Received-Finish	Final Dwgs	Actual	100% Construction Drawing Received-Finish	Pre-Con - Final Drawings
-V:(F 1360) Billing Milestone 1 Complete-Finish	BMS1 SVCS rev rec	Forecast	Billing Milestone 1 Complete	Pre-Con - Ms1 Rev Rec  
-V:(A 1360) Billing Milestone 1 Complete-Finish	BMS1 SVCS rev rec	Actual	Billing Milestone 1 Complete	Pre-Con - Ms1 Rev Rec  
-V:(F 3345) Viaero Ground NTP Received-Finish	BMS1 SVCS rev rec	Forecast	Viaero Ground NTP Received-Finish	Ground NTP
-V:(A 3345) Viaero Ground NTP Received-Finish	BMS1 SVCS rev rec	Actual	Viaero Ground NTP Received-Finish	Ground NTP
-V:(F 3460) Ground Construction Complete-Finish	BMS2 Cx Complete	Forecast	Ground Construction Complete-Finish	BBU - Ground Install (sites)
-V:(A 3460) Ground Construction Complete-Finish	BMS2 Cx Complete	Actual	Ground Construction Complete-Finish	BBU - Ground Install (sites)
-V:(F 3995) Billing Milestone 2 Complete-Finish	BMS2 SVCS rev rec	Forecast	Billing Milestone 2 Complete	BBU - MS2 Rev Rec
-V:(A 3995) Billing Milestone 2 Complete-Finish	BMS2 SVCS rev rec	Actual	Billing Milestone 2 Complete	BBU - MS2 Rev Rec
-V:(F 3300) Viaero Tower NTP Received-Finish	BMS2 SVCS rev rec	Forecast	Viaero Tower NTP Received-Finish	Tower NTP
-V:(A 3300) Viaero Tower NTP Received-Finish	BMS2 SVCS rev rec	Actual	Viaero Tower NTP Received-Finish	Tower NTP
-V:(F 3340) Tower Construction Start-Finish	BMS3 Cx Start	Forecast	Tower Construction Start	RRH - Tower CxS 
-V:(A 3340) Tower Construction Start-Finish	BMS3 Cx Start	Actual	Tower Construction Start	RRH - Tower CxS 
-V:(F 3820) Tower Installation Complete-Finish	BMS3 Cx Complete	Forecast	Tower Installation Complete	RRH - Tower CxC
-V:(A 3820) Tower Installation Complete-Finish	BMS3 Cx Complete	Actual	Tower Installation Complete	RRH - Tower CxC
-V:(F 5500) Billing Milestone 3 Complete-Finish	BMS3 SVCS rev rec	Forecast	Billing Milestone 3 Complete	MS3 Rev Rec
-V:(A 5500) Billing Milestone 3 Complete-Finish	BMS3 SVCS rev rec	Actual	Billing Milestone 3 Complete	MS3 Rev Rec
-V:(F 5530) Billing Milestone 4 Complete-Finish	BMS3 SVCS rev rec	Forecast	Billing Milestone 4 Complete	MS4 Rev Rec
-V:(A 5530) Billing Milestone 4 Complete-Finish	BMS3 SVCS rev rec	Actual	Billing Milestone 4 Complete	MS4 Rev Rec
-V:(F 5050) De-installed Equipment Return Completed-Finish	BMS3 SVCS rev rec	Forecast	De-installed Equipment Return Completed	Cx Decom
-V:(A 5050) De-installed Equipment Return Completed-Finish	BMS3 SVCS rev rec	Actual	De-installed Equipment Return Completed	Cx Decom
-V:(F 5560) Site Acceptance-Finish	BMS3 SVCS rev rec	Forecast	Site Acceptance	MS5 - Final Site Acceptance
-V:(A 5560) Site Acceptance-Finish	BMS3 SVCS rev rec	Actual	Site Acceptance	MS5 - Final Site Acceptance
-V:(F 5585) Billing Milestone 5 Complete-Finish	BMS3 SVCS rev rec	Forecast	Billing Milestone 5 Complete	MS5 - Final Site Acceptance Rev Rec
-V:(A 5585) Billing Milestone 5 Complete-Finish	BMS3 SVCS rev rec	Actual	Billing Milestone 5 Complete	MS5 - Final Site Acceptance Rev Rec
-
-2. For the same table, I need to add months since today until Agust 2026, and per each month I need to divide by week. 
-3. Accourding for each column, we need to count the values and add for the week that corresponding. 
-4. Per each row, I need to add an extra row with the same name but adding "cumulative"; this row is going to be the count for the current week plus the last week. 
-5. In differetn sheet I, I need the same table but doing an acount per month only and I need to cumulative row too. 
-6. At the end, I need something like this: 
-
-					2025	2025				2025					2025				2025			
-	1.5				May	June				July					August				September			
-Weekly	F/A	OV MS#	Task Name		Wk 22	Wk 23	Wk 24	Wk 25	Wk 26	Wk 27	Wk 28	Wk 29	Wk 30	Wk 31	Wk 32	Wk 33	Wk 34	Wk 35	Wk 36	Wk 37	Wk 38	Wk 39
-A&E Site Walks	Forecast	1120	 Site Audit Walk Package Received-Finish	Pre-Con - Site Walk	46	0	0	0	0	0	0	0	10	20	20	20	20	20	20	20	20	20
-	Actual			Pre-Con - Site Walk	50	0	0	0	0	0	0	0	0	0	55	45	45	0	0	0	0	0
-	Forecast			Pre-Con - Site Walk (Cumulative)	46	46	46	46	46	46	46	46	56	76	96	116	136	156	176	196	216	236
-	Actual			Pre-Con - Site Walk (Cumulative)	50	50	50	50	50	50	50	50	50	50	105	150	195	195	195	195	195	195
-
-7.all this code need to be deploy in python and the final result need to be an excel named "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
-
-Code to implement:
-
-import pandas as pd
-from datetime import datetime, timedelta
-
-# Define the data
-data = [
-    {"Weekly": "A&E Site Walks", "F/A": "Forecast", "Task Name": "V:(F 1120) Site Audit Walk Package Received-Finish", "New Name": "Pre-Con - Site Walk"},
-    {"Weekly": "A&E Site Walks", "F/A": "Actual", "Task Name": "V:(A 1120) Site Audit Walk Package Received-Finish", "New Name": "Pre-Con - Site Walk"},
-    {"Weekly": "A&E Lease Exhibit", "F/A": "Forecast", "Task Name": "V:(F 1125) Ground Cabling BOM Received-Finish", "New Name": "Pre-Con - Cable BOM and LE"},
-    {"Weekly": "A&E Lease Exhibit", "F/A": "Actual", "Task Name": "V:(A 1125) Ground Cabling BOM Received-Finish", "New Name": "Pre-Con - Cable BOM and LE"},
-    {"Weekly": "Final Dwgs", "F/A": "Forecast", "Task Name": "V:(F 1146) 100% Construction Drawing Received-Finish", "New Name": "Pre-Con - Final Drawings"},
-    {"Weekly": "Final Dwgs", "F/A": "Actual", "Task Name": "V:(A 1146) 100% Construction Drawing Received-Finish", "New Name": "Pre-Con - Final Drawings"},
-    {"Weekly": "BMS1 SVCS rev rec", "F/A": "Forecast", "Task Name": "V:(F 1360) Billing Milestone 1 Complete-Finish", "New Name": "Pre-Con - Ms1 Rev Rec"},
-    {"Weekly": "BMS1 SVCS rev rec", "F/A": "Actual", "Task Name": "V:(A 1360) Billing Milestone 1 Complete-Finish", "New Name": "Pre-Con - Ms1 Rev Rec"},
-    {"Weekly": "BMS2 Cx Complete", "F/A": "Forecast", "Task Name": "V:(F 3460) Ground Construction Complete-Finish", "New Name": "BBU - Ground Install (sites)"},
-    {"Weekly": "BMS2 Cx Complete", "F/A": "Actual", "Task Name": "V:(A 3460) Ground Construction Complete-Finish", "New Name": "BBU - Ground Install (sites)"},
-    {"Weekly": "BMS3 Cx Start", "F/A": "Forecast", "Task Name": "V:(F 3340) Tower Construction Start-Finish", "New Name": "RRH - Tower CxS"},
-    {"Weekly": "BMS3 Cx Start", "F/A": "Actual", "Task Name": "V:(A 3340) Tower Construction Start-Finish", "New Name": "RRH - Tower CxS"},
-]
-
-# Create DataFrame
-df = pd.DataFrame(data)
-
-# Define the start and end dates
-start_date = datetime.today()
-end_date = datetime(2026, 8, 1)
-
-# Generate weekly dates
-weeks = pd.date_range(start=start_date, end=end_date, freq="W-MON")
-
-# Create a DataFrame for weeks and months
-df_weeks = pd.DataFrame({
-    "Week Start Date": weeks,
-    "Month": weeks.to_series().dt.to_period("M"),
-    "Week Number": range(1, len(weeks) + 1)
-})
-
-# Merge the original data with weeks
-df_report = pd.merge(df.assign(key=1), df_weeks.assign(key=1), on="key").drop(columns=["key"])
-
-# Add cumulative rows
-cumulative_data = []
-for (weekly, f_a, task_name, new_name), group in df_report.groupby(["Weekly", "F/A", "Task Name", "New Name"]):
-    group = group.copy()
-    group["Cumulative"] = group["Week Number"].cumsum()
-    cumulative_data.append(group)
-
-df_cumulative = pd.concat(cumulative_data)
-
-# Create a monthly summary
-df_monthly = df_cumulative.groupby(["Weekly", "F/A", "Task Name", "New Name", "Month"]).size().reset_index(name="Count")
-df_monthly["Cumulative Count"] = df_monthly.groupby(["Weekly", "F/A", "Task Name", "New Name"])["Count"].cumsum()
-
-# Write to Excel
-output_filename = "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
-with pd.ExcelWriter(output_filename) as writer:
-    df_cumulative.to_excel(writer, sheet_name="Weekly Breakdown", index=False)
-    df_monthly.to_excel(writer, sheet_name="Monthly Summary", index=False)
-
-print(f"Report successfully created: {output_filename}")
-
-
-V2
-
+# Import libraries
 import pandas as pd
 from datetime import datetime
+from ayx import Package
+from ayx import Alteryx
+import re
+import warnings
 
-# Define the file path
-file_path = r"\\netapp\depts\Jannat\Viaero\YourFileName.xlsx"  # Replace 'YourFileName.xlsx' with the actual file name
+# Suppress the UserWarning from pandas about openpyxl
+warnings.simplefilter(action='ignore', category=UserWarning)
 
-# Read the data from the file
-# If the file is an Excel file
+# --- Step 2: Define file path and read data ---
+file_path = r"\\netapp\depts\Jannat\Viaero\BMS_TrackerProgress.xlsx"
+df = None
+
 try:
-    df = pd.read_excel(file_path)
+    df = pd.read_excel(file_path, engine='openpyxl')
+    print("File read successfully.")
 except FileNotFoundError:
     print(f"Error: File not found at {file_path}")
-    exit(1)
+    df = pd.DataFrame({'Error': ["File not found."]})
 except Exception as e:
     print(f"Error reading file: {e}")
-    exit(1)
+    df = pd.DataFrame({'Error': [f"File reading failed: {e}"]})
 
-# Drop the 'Milestone' column if it exists
-if 'Milestone' in df.columns:
-    df = df.drop(columns=['Milestone'])
+if 'Error' in df.columns:
+    Alteryx.write(df, 1)
+    exit()
 
-# Define the start and end dates
-start_date = datetime.today()
+# --- Step 3: Unpivot the milestone data ---
+id_vars = [
+    'CL:Customer Name', 'P:Viaero Root ID', 'C:Site Name (SPMS)',
+    'WPK:Work Package Description', 'P:Project ID', 'C:Site ID',
+    'P:Viaero Phase', 'P:Viaero Project Type', 'P:Cluster ID',
+    'P:FWA (Existing)', 'P:FWA (Scope)', 'P:FWA (Final)',
+    'P:Mobility (Existing)', 'P:Mobility (Scope)', 'P:Mobility (Final)',
+    'M:Market', 'P:Project Class', 'P:Project Status'
+]
+
+milestone_cols = [col for col in df.columns if col.startswith('V:(')]
+df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
+
+# --- Step 4: Extract required columns from unpivoted data ---
+def extract_f_a(milestone_str):
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
+milestone_mapping = {
+    'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
+    'Ground Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE'),
+    'Tower Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE - Tower'),
+    '100% Construction Drawing Received-Finish': ('100% Construction Drawing Received-Finish', 'Pre-Con - Final Drawings'),
+    'Billing Milestone 1 Complete-Finish': ('Billing Milestone 1 Complete', 'Pre-Con - Ms1 Rev Rec'),
+    'Viaero Ground NTP Received-Finish': ('Viaero Ground NTP Received-Finish', 'Ground NTP'),
+    'Ground Construction Complete-Finish': ('Ground Construction Complete-Finish', 'BBU - Ground Install (sites)'),
+    'Billing Milestone 2 Complete-Finish': ('Billing Milestone 2 Complete', 'BBU - MS2 Rev Rec'),
+    'Viaero Tower NTP Received-Finish': ('Viaero Tower NTP Received-Finish', 'Tower NTP'),
+    'Tower Construction Start-Finish': ('Tower Construction Start', 'RRH - Tower CxS'),
+    'Tower Installation Complete-Finish': ('Tower Installation Complete', 'RRH - Tower CxC'),
+    'Billing Milestone 3 Complete-Finish': ('Billing Milestone 3 Complete', 'MS3 Rev Rec'),
+    'Billing Milestone 4 Complete-Finish': ('Billing Milestone 4 Complete', 'MS4 Rev Rec'),
+    'De-installed Equipment Return Completed-Finish': ('De-installed Equipment Return Completed', 'Cx Decom'),
+    'Site Acceptance-Finish': ('Site Acceptance', 'MS5 - Final Site Acceptance'),
+    'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec')
+}
+
+def extract_names(milestone_str):
+    match = re.search(r'V:\((F|A)\s\d{4}\)\s(.*)', milestone_str)
+    milestone_name = match.group(2) if match else milestone_str
+    return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
+
+df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
+df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda x: pd.Series(extract_names(x)))
+df_unpivoted['Weekly'] = df_unpivoted['New name']
+
+# --- Step 5: Count non-empty date values per milestone ---
+date_counts_list = []
+for col in milestone_cols:
+    date_count = pd.to_datetime(df[col], errors='coerce').notna().sum()
+    date_counts_list.append({'Milestone': col, 'Date_Count': date_count})
+df_date_counts = pd.DataFrame(date_counts_list)
+df_unpivoted = pd.merge(df_unpivoted, df_date_counts, on='Milestone', how='left')
+
+
+# --- Step 6: Generate date ranges and merge with data ---
+today = datetime.today()
 end_date = datetime(2026, 8, 1)
-
-# Generate weekly dates
-weeks = pd.date_range(start=start_date, end=end_date, freq="W-MON")
-
-# Create a DataFrame for weeks and months
+weeks = pd.date_range(start=today, end=end_date, freq="W-MON")
 df_weeks = pd.DataFrame({
     "Week Start Date": weeks,
     "Month": weeks.to_series().dt.to_period("M"),
-    "Week Number": range(1, len(weeks) + 1)
+    "Year": weeks.to_series().dt.year,
+    "Week Number": range(1, len(weeks) + 1),
+    "Month_Name": weeks.to_series().dt.strftime("%B")
 })
 
-# Merge the original data with weeks
-df_report = pd.merge(df.assign(key=1), df_weeks.assign(key=1), on="key").drop(columns=["key"])
+df_unpivoted['key'] = 1
+df_weeks['key'] = 1
+df_report = pd.merge(df_unpivoted, df_weeks, on="key").drop(columns=["key"])
 
-# Add cumulative rows
-cumulative_data = []
-for (weekly, f_a, task_name, new_name), group in df_report.groupby(["Weekly", "F/A", "Task Name", "New Name"]):
-    group = group.copy()
-    group["Cumulative"] = group["Week Number"].cumsum()
-    cumulative_data.append(group)
+# --- Step 7: Create weekly and monthly reports (using Date_Count) ---
+# Weekly Report (Month by Month)
+weekly_pivot = df_report.groupby(["Weekly", "F/A", "Task Name", "New name", "Year", "Month_Name", "Week Number"])['Date_Count'].first().unstack(level=[4, 5, 6], fill_value=0)
+final_weekly_report = weekly_pivot
 
-df_cumulative = pd.concat(cumulative_data)
+# Monthly Report (Summary only)
+monthly_pivot = df_report.groupby(["Weekly", "F/A", "Task Name", "New name", "Year", "Month"])['Date_Count'].first().unstack(level=[4, 5], fill_value=0)
+final_monthly_report = monthly_pivot
 
-# Create a monthly summary
-df_monthly = df_cumulative.groupby(["Weekly", "F/A", "Task Name", "New Name", "Month"]).size().reset_index(name="Count")
-df_monthly["Cumulative Count"] = df_monthly.groupby(["Weekly", "F/A", "Task Name", "New Name"])["Count"].cumsum()
-
-# Write to Excel
-output_filename = "Viaero_BMS_ProgressTracker_9.2.25_OV MS rev1.xlsx"
+# --- Step 8: Write reports to multi-sheet Excel file ---
+output_filename = r"Viaero_BMS_ProgressTracker_" + today.strftime("%m.%d.%y") + "_OV MS rev1.xlsx"
 try:
-    with pd.ExcelWriter(output_filename) as writer:
-        df_cumulative.to_excel(writer, sheet_name="Weekly Breakdown", index=False)
-        df_monthly.to_excel(writer, sheet_name="Monthly Summary", index=False)
-    print(f"Report successfully created: {output_filename}")
+    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+        final_weekly_report.to_excel(writer, sheet_name='Weekly Report')
+        final_monthly_report.to_excel(writer, sheet_name='Monthly Report')
+    print(f"Report saved successfully to {output_filename}")
 except Exception as e:
-    print(f"Error writing to Excel: {e}")
+    print(f"Error writing to Excel file: {e}")
+
+# --- Step 9: Pass a DataFrame back to Alteryx ---
+final_weekly_report_flat = final_weekly_report.reset_index()
+
+weekly_column_names = [f"{col[0]}_{col[1]}_{col[2]}" for col in final_weekly_report.columns]
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name', 'New name'] + weekly_column_names
+
+Alteryx.write(final_weekly_report_flat, 1)
+
