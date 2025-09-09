@@ -128,4 +128,3 @@ final_weekly_report_flat = final_weekly_report.reset_index()
 final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
-
