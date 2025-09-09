@@ -64,13 +64,10 @@ milestone_mapping = {
 }
 
 def extract_names(milestone_str):
-    # This regex is more robust, capturing the text after the year and ')'
-    # It also handles cases with only the milestone name after the 'V:'
     match = re.search(r'V:\((?:F|A) \d{4}\) (.+)', milestone_str)
     if match:
         milestone_name = match.group(1).strip()
     else:
-        # Fallback for headers without the year
         match = re.search(r'V:\((?:F|A)\) (.+)', milestone_str)
         if match:
             milestone_name = match.group(1).strip()
@@ -96,7 +93,6 @@ df_with_dates['Milestone_Count'] = 1
 # Create 'Week of Year' and 'Month_Year' columns for pivoting
 df_with_dates['Week Label'] = 'Week ' + df_with_dates['Status'].dt.isocalendar().week.astype(str)
 df_with_dates['Month'] = df_with_dates['Status'].dt.strftime('%B %Y')
-df_with_dates['Month_Year'] = df_with_dates['Status'].dt.to_period('M')
 
 # --- Step 6: Create weekly and monthly reports using pivot tables ---
 # Weekly Report
@@ -108,21 +104,26 @@ weekly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-final_weekly_report = weekly_pivot
+
+# Sort the columns of the weekly pivot table chronologically
+weekly_pivot.columns = weekly_pivot.columns.to_flat_index()
+weekly_pivot.columns = pd.MultiIndex.from_tuples(weekly_pivot.columns)
+sorted_weekly_cols = sorted(weekly_pivot.columns, key=lambda x: datetime.strptime(x[0], '%B %Y').date())
+final_weekly_report = weekly_pivot.reindex(columns=sorted_weekly_cols)
 
 # Monthly Report
 monthly_pivot = pd.pivot_table(
     df_with_dates,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
-    columns=['Month_Year'],
+    columns=['Month'],
     aggfunc='sum',
     fill_value=0
 )
 
-# Sort the columns of the monthly report chronologically
-monthly_pivot = monthly_pivot.reindex(columns=monthly_pivot.columns.sort_values())
-final_monthly_report = monthly_pivot
+# Sort the columns of the monthly pivot table chronologically
+sorted_monthly_cols = sorted(monthly_pivot.columns, key=lambda x: datetime.strptime(x, '%B %Y').date())
+final_monthly_report = monthly_pivot.reindex(columns=sorted_monthly_cols)
 
 # --- Step 7: Write reports to multi-sheet Excel file ---
 today = datetime.today()
@@ -142,3 +143,4 @@ final_weekly_report_flat = final_weekly_report.reset_index()
 final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
+
