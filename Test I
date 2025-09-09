@@ -83,7 +83,8 @@ df_with_dates = df_unpivoted.dropna(subset=['Status']).copy()
 df_with_dates['Milestone_Count'] = 1
 
 # Create 'Week of Year' and 'Month_Year' columns for pivoting
-df_with_dates['Week of Year'] = df_with_dates['Status'].dt.isocalendar().week.astype(str) + '-' + df_with_dates['Status'].dt.year.astype(str)
+df_with_dates['Week Label'] = 'Week ' + df_with_dates['Status'].dt.isocalendar().week.astype(str)
+df_with_dates['Month'] = df_with_dates['Status'].dt.strftime('%B %Y')
 df_with_dates['Month_Year'] = df_with_dates['Status'].dt.to_period('M')
 
 # --- Step 6: Create weekly and monthly reports using pivot tables ---
@@ -92,7 +93,7 @@ weekly_pivot = pd.pivot_table(
     df_with_dates,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
-    columns=['Week of Year'],
+    columns=['Month', 'Week Label'],
     aggfunc='sum',
     fill_value=0
 )
@@ -124,12 +125,7 @@ except Exception as e:
 # Flatten the weekly report for Alteryx
 final_weekly_report_flat = final_weekly_report.reset_index()
 # Rename columns to a flat list for Alteryx
-final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [col for col in final_weekly_report.columns]
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
-
-This YouTube video explains how to use the `pd.melt()` function to unpivot dataframes in Python, a process similar to the one in your code. 
-[Unpivoting dataframes with Pandas melt](https://www.youtube.com/watch?v=ZvqONDEF1sw)
-http://googleusercontent.com/youtube_content/0 *YouTube video views will be stored in your YouTube History, and your data will be stored and used by YouTube according to its [Terms of Service](https://www.youtube.com/static?template=terms)*
-
 
