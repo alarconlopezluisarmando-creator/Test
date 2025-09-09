@@ -1,3 +1,5 @@
+Existing code V1. 
+
 # Import libraries
 import pandas as pd
 from datetime import datetime
@@ -162,17 +164,30 @@ except Exception as e:
     print(f"Error writing to Excel file: {e}")
 
 # --- Step 8: Pass a DataFrame back to Alteryx ---
+# Flatten the weekly report
 final_weekly_report_flat = final_weekly_report.reset_index()
-# Rename columns to a flat list for Alteryx, handling the MultiIndex
-new_columns = []
-for col in final_weekly_report.columns:
-    if isinstance(col, tuple):
-        new_columns.append(f"{col[0]} - {col[1]}")
-    else:
-        new_columns.append(col)
-        
-final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + new_columns
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
+final_weekly_report_flat['Report Type'] = 'Weekly'
 
-Alteryx.write(final_weekly_report_flat, 1)
+# Flatten the monthly report
+final_monthly_report_flat = final_monthly_report.reset_index()
+new_columns_monthly = ['Weekly', 'F/A', 'Task Name'] + [col for col in final_monthly_report.columns]
+final_monthly_report_flat.columns = new_columns_monthly
+final_monthly_report_flat['Report Type'] = 'Monthly'
 
+# Align columns and combine the two dataframes
+weekly_cols = final_weekly_report_flat.columns
+monthly_cols = final_monthly_report_flat.columns
 
+# Find all unique columns and create a complete set
+all_cols = list(set(weekly_cols) | set(monthly_cols))
+
+# Reindex dataframes to have the same columns
+final_weekly_report_flat = final_weekly_report_flat.reindex(columns=all_cols, fill_value=None)
+final_monthly_report_flat = final_monthly_report_flat.reindex(columns=all_cols, fill_value=None)
+
+# Combine the two dataframes
+combined_df = pd.concat([final_weekly_report_flat, final_monthly_report_flat], ignore_index=True)
+
+# Write the combined dataframe to Alteryx
+Alteryx.write(combined_df, 1)
