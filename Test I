@@ -1,3 +1,7 @@
+I have below code, is almost work but I found some issues:
+1. For the "Cumulative" rows, if we dont have data, we need to add a "0".
+2. Could you check if the Cumulative count is doing correct. 
+
 # Import libraries
 import pandas as pd
 from datetime import datetime
