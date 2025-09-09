@@ -2,6 +2,7 @@
 import pandas as pd
 from datetime import datetime
 from ayx import Alteryx
+import re
 import warnings
 
 # Suppress the UserWarning from pandas about openpyxl
@@ -38,8 +39,11 @@ id_vars = [
 milestone_cols = [col for col in df.columns if col.startswith('V:(')]
 df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
 
-# --- Step 4: Extract required columns and clean data ---
-import re
+# --- Step 4: Extract required columns from unpivoted data ---
+def extract_f_a(milestone_str):
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
 milestone_mapping = {
     'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
     'Ground Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE'),
@@ -59,10 +63,6 @@ milestone_mapping = {
     'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec')
 }
 
-def extract_f_a(milestone_str):
-    match = re.search(r'V:\((F|A)', milestone_str)
-    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
-
 def extract_names(milestone_str):
     match = re.search(r'V:\((F|A)\s\d{4}\)\s(.*)', milestone_str)
     milestone_name = match.group(2) if match else milestone_str
@@ -72,63 +72,45 @@ df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
 df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda x: pd.Series(extract_names(x)))
 df_unpivoted['Weekly'] = df_unpivoted['New name']
 
-# --- Step 5: Count milestones per week ---
+# --- Step 5: Prepare data for weekly and monthly reports ---
 # Convert 'Status' column to datetime, forcing invalid dates to NaT
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
 
 # Filter for rows with valid dates for the report
 df_with_dates = df_unpivoted.dropna(subset=['Status']).copy()
 
-# Create 'Week Start Date' column from the 'Status' date
-df_with_dates['Week Start Date'] = df_with_dates['Status'].dt.to_period('W-MON').dt.start_time
-df_with_dates['Milestone_Count'] = 1 # A simple count for each valid date
+# Add a 'Milestone_Count' column for aggregation
+df_with_dates['Milestone_Count'] = 1
 
-# Aggregate the data to count milestones per week and per name
-df_aggregated = df_with_dates.groupby(
-    ['Weekly', 'F/A', 'Task Name', 'Week Start Date']
-)['Milestone_Count'].sum().reset_index()
+# Create 'Week of Year' and 'Month_Year' columns for pivoting
+df_with_dates['Week of Year'] = df_with_dates['Status'].dt.isocalendar().week.astype(str) + '-' + df_with_dates['Status'].dt.year.astype(str)
+df_with_dates['Month_Year'] = df_with_dates['Status'].dt.to_period('M')
 
-
-# --- Step 6: Generate date ranges and merge with data ---
-today = datetime.today()
-end_date = datetime(2026, 8, 1)
-weeks = pd.date_range(start=today, end=end_date, freq="W-MON")
-df_weeks = pd.DataFrame({
-    "Week Start Date": weeks,
-    "Year": weeks.to_series().dt.year,
-    "Month_Name": weeks.to_series().dt.strftime("%B"),
-    "Month_Year": weeks.to_series().dt.to_period("M"),
-})
-
-# Merge the aggregated data with the week ranges
-df_report = pd.merge(df_aggregated, df_weeks, on="Week Start Date", how="right").fillna(0)
-
-# The Milestone_Count is now 0 for weeks where there were no milestones
-df_report = df_report.astype({'Milestone_Count': int})
-
-# --- Step 7: Create weekly and monthly reports ---
+# --- Step 6: Create weekly and monthly reports using pivot tables ---
 # Weekly Report
 weekly_pivot = pd.pivot_table(
-    df_report,
+    df_with_dates,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
-    columns=['Week Start Date'],
+    columns=['Week of Year'],
+    aggfunc='sum',
     fill_value=0
 )
 final_weekly_report = weekly_pivot
 
 # Monthly Report
-monthly_report = df_report.groupby(['Weekly', 'F/A', 'Task Name', 'Month_Year'])['Milestone_Count'].sum().reset_index()
 monthly_pivot = pd.pivot_table(
-    monthly_report,
+    df_with_dates,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
     columns=['Month_Year'],
+    aggfunc='sum',
     fill_value=0
 )
 final_monthly_report = monthly_pivot
 
-# --- Step 8: Write reports to multi-sheet Excel file ---
+# --- Step 7: Write reports to multi-sheet Excel file ---
+today = datetime.today()
 output_filename = r"Viaero_BMS_ProgressTracker_" + today.strftime("%m.%d.%y") + "_OV MS rev1.xlsx"
 try:
     with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
@@ -138,10 +120,16 @@ try:
 except Exception as e:
     print(f"Error writing to Excel file: {e}")
 
-# --- Step 9: Pass a DataFrame back to Alteryx ---
+# --- Step 8: Pass a DataFrame back to Alteryx ---
 # Flatten the weekly report for Alteryx
 final_weekly_report_flat = final_weekly_report.reset_index()
 # Rename columns to a flat list for Alteryx
-final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [col.strftime('%Y-%m-%d') for col in final_weekly_report.columns]
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [col for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
+
+This YouTube video explains how to use the `pd.melt()` function to unpivot dataframes in Python, a process similar to the one in your code. 
+[Unpivoting dataframes with Pandas melt](https://www.youtube.com/watch?v=ZvqONDEF1sw)
+http://googleusercontent.com/youtube_content/0 *YouTube video views will be stored in your YouTube History, and your data will be stored and used by YouTube according to its [Terms of Service](https://www.youtube.com/static?template=terms)*
+
+
