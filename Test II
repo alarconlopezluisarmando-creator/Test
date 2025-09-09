@@ -1066,5 +1066,220 @@ final_monthly_report_flat.columns = new_columns_monthly
 Alteryx.write(final_weekly_report_flat, 1)
 Alteryx.write(final_monthly_report_flat, 2)
 
+Code V6.
+# Import libraries
+import pandas as pd
+from datetime import datetime, timedelta
+from ayx import Alteryx
+import re
+import warnings
+import numpy as np
+from calendar import monthrange
+
+# Suppress the UserWarning from pandas about openpyxl
+warnings.simplefilter(action='ignore', category=UserWarning)
+
+# --- Step 2: Define file path and read data ---
+file_path = r"\\netapp\depts\Jannat\Viaero\BMS_TrackerProgress.xlsx"
+df = None
+
+try:
+    df = pd.read_excel(file_path, engine='openpyxl')
+    print("File read successfully.")
+except FileNotFoundError:
+    print(f"Error: File not found at {file_path}")
+    df = pd.DataFrame({'Error': ["File not found."]})
+except Exception as e:
+    print(f"Error reading file: {e}")
+    df = pd.DataFrame({'Error': [f"File reading failed: {e}"]})
+
+if 'Error' in df.columns:
+    Alteryx.write(df, 1)
+    exit()
+
+# --- Step 3: Unpivot the milestone data ---
+id_vars = [
+    'CL:Customer Name', 'P:Viaero Root ID', 'C:Site Name (SPMS)',
+    'WPK:Work Package Description', 'P:Project ID', 'C:Site ID',
+    'P:Viaero Phase', 'P:Viaero Project Type', 'P:Cluster ID',
+    'P:FWA (Existing)', 'P:FWA (Scope)', 'P:FWA (Final)',
+    'P:Mobility (Existing)', 'P:Mobility (Scope)', 'P:Mobility (Final)',
+    'M:Market', 'P:Project Class', 'P:Project Status'
+]
+
+milestone_cols = [col for col in df.columns if col.startswith('V:(')]
+df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
+
+# --- Step 4: Extract required columns from unpivoted data ---
+def extract_f_a(milestone_str):
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
+milestone_mapping = {
+    'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
+    'Ground Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE'),
+    'Tower Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE - Tower'),
+    '100% Construction Drawing Received-Finish': ('100% Construction Drawing Received-Finish', 'Pre-Con - Final Drawings'),
+    'Billing Milestone 1 Complete-Finish': ('Billing Milestone 1 Complete', 'Pre-Con - Ms1 Rev Rec'),
+    'Viaero Ground NTP Received-Finish': ('Viaero Ground NTP Received-Finish', 'Ground NTP'),
+    'Ground Construction Complete-Finish': ('Ground Construction Complete-Finish', 'BBU - Ground Install (sites)'),
+    'Billing Milestone 2 Complete-Finish': ('Billing Milestone 2 Complete', 'BBU - MS2 Rev Rec'),
+    'Viaero Tower NTP Received-Finish': ('Viaero Tower NTP Received-Finish', 'Tower NTP'),
+    'Tower Construction Start-Finish': ('Tower Construction Start', 'RRH - Tower CxS'),
+    'Tower Installation Complete-Finish': ('Tower Installation Complete', 'RRH - Tower CxC'),
+    'Billing Milestone 3 Complete-Finish': ('Billing Milestone 3 Complete', 'MS3 Rev Rec'),
+    'Billing Milestone 4 Complete-Finish': ('Billing Milestone 4 Complete', 'MS4 Rev Rec'),
+    'De-installed Equipment Return Completed-Finish': ('De-installed Equipment Return Completed', 'Cx Decom'),
+    'Site Acceptance-Finish': ('Site Acceptance', 'MS5 - Final Site Acceptance'),
+    'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec'),
+    'SSV Submitted to Customer FWA-Finish': ('SSV Submitted to Customer FWA-Finish', 'MS4 - SSV Submitted - FWA'),
+    'SSV Submitted to Customer Mobility-Finish': ('SSV Submitted to Customer Mobility-Finish', 'MS4 - SSV Submitted')
+}
+
+def extract_names(milestone_str):
+    match = re.search(r'V:\((?:F|A) \d{4}\) (.+)', milestone_str)
+    if match:
+        milestone_name = match.group(1).strip()
+    else:
+        match = re.search(r'V:\((?:F|A)\) (.+)', milestone_str)
+        if match:
+            milestone_name = match.group(1).strip()
+        else:
+            milestone_name = milestone_str
+    
+    return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
+
+df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
+df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda x: pd.Series(extract_names(x)))
+df_unpivoted['Weekly'] = df_unpivoted['New name']
+
+# --- Step 5: Prepare data for weekly and monthly reports ---
+df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
+
+# Filter to show all data from 2025 onwards
+df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
+
+df_unpivoted['Milestone_Count'] = 1
+df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
+df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
+
+# --- Step 6: Create weekly and monthly reports using pivot tables ---
+def sort_columns_by_date(df_pivot):
+    """Sorts the columns of a pivot table chronologically."""
+    def sort_key(col):
+        if isinstance(col, tuple):
+            # Handles Weekly columns (Month, Week Label)
+            month_str, week_str = col
+            is_no_date = month_str == 'No Date'
+        else:
+            # Handles Monthly columns (Month)
+            month_str = col
+            is_no_date = month_str == 'No Date'
+        
+        if is_no_date:
+            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
+        
+        try:
+            if isinstance(col, tuple):
+                month_year_dt = datetime.strptime(month_str, '%B %Y')
+                week_num = int(week_str.replace('Week ', ''))
+                return (month_year_dt.year, month_year_dt.month, week_num)
+            else:
+                return (datetime.strptime(month_str, '%B %Y').year, datetime.strptime(month_str, '%B %Y').month)
+        except ValueError:
+            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
+
+    sorted_cols = sorted(df_pivot.columns, key=sort_key)
+    return df_pivot.reindex(columns=sorted_cols)
+
+def get_all_weeks_in_year():
+    """Generates all week labels for the current year."""
+    all_weeks = []
+    current_year = datetime.now().year
+    
+    for week in range(1, 54):
+        try:
+            date_for_week = datetime.strptime(f'{current_year}-W{week}-1', "%Y-W%W-%w")
+            month_label = date_for_week.strftime('%B %Y')
+            week_label = f'Week {week}'
+            all_weeks.append((month_label, week_label))
+        except ValueError:
+            continue
+    return all_weeks
+
+all_week_cols = get_all_weeks_in_year()
+
+# Weekly Report
+weekly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month', 'Week Label'],
+    aggfunc='sum',
+    fill_value=0
+)
+
+current_cols = set(weekly_pivot.columns)
+missing_cols = [col for col in all_week_cols if col not in current_cols]
+for col in missing_cols:
+    weekly_pivot[col] = 0
+
+final_weekly_report = sort_columns_by_date(weekly_pivot)
+
+# Monthly Report
+monthly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month'],
+    aggfunc='sum',
+    fill_value=0
+)
+
+final_monthly_report = sort_columns_by_date(monthly_pivot)
+
+# --- Create and add cumulative rows to reports ---
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], "") for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+    )
+    
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+final_weekly_report = add_cumulative_rows(final_weekly_report)
+final_monthly_report = add_cumulative_rows(final_monthly_report)
+
+# --- Step 7: Write reports to multi-sheet Excel file ---
+today = datetime.today()
+output_filename = r"Viaero_BMS_ProgressTracker_" + today.strftime("%m.%d.%y") + "_OV MS rev1.xlsx"
+try:
+    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+        final_weekly_report.to_excel(writer, sheet_name='Weekly Report')
+        final_monthly_report.to_excel(writer, sheet_name='Monthly Report')
+    print(f"Report saved successfully to {output_filename}")
+except Exception as e:
+    print(f"Error writing to Excel file: {e}")
+
+# --- Step 8: Pass a DataFrame back to Alteryx ---
+final_weekly_report_flat = final_weekly_report.reset_index()
+new_columns_weekly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
+final_weekly_report_flat.columns = new_columns_weekly
+
+final_monthly_report_flat = final_monthly_report.reset_index()
+new_columns_monthly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [col for col in final_monthly_report.columns]
+final_monthly_report_flat.columns = new_columns_monthly
+
+Alteryx.write(final_weekly_report_flat, 1)
+Alteryx.write(final_monthly_report_flat, 2)
+
+
 
 
