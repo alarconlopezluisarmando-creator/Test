@@ -175,3 +175,26 @@ final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + new_columns
 
 Alteryx.write(final_weekly_report_flat, 1)
 
+
+Update code. 
+# --- Step 7: Write reports to multi-sheet Excel file ---
+today = datetime.today()
+output_filename = r"Viaero_BMS_ProgressTracker_" + today.strftime("%m.%d.%y") + "_OV MS rev1.xlsx"
+try:
+    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+        final_weekly_report.to_excel(writer, sheet_name='Weekly Report')
+        final_monthly_report.to_excel(writer, sheet_name='Monthly Report')
+    print(f"Report saved successfully to {output_filename}")
+except Exception as e:
+    print(f"Error writing to Excel file: {e}")
+
+# --- Step 8: Pass a DataFrame back to Alteryx ---
+# Flatten the monthly report for Alteryx
+final_monthly_report_flat = final_monthly_report.reset_index()
+
+# Rename columns to a flat list for Alteryx
+new_columns_monthly = ['Weekly', 'F/A', 'Task Name'] + [col for col in final_monthly_report.columns]
+final_monthly_report_flat.columns = new_columns_monthly
+
+Alteryx.write(final_monthly_report_flat, 1)
+
