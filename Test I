@@ -1,13 +1,10 @@
-I have below code, is almost work but I found some issues:
-1. For the "Cumulative" rows, if we dont have data, we need to add a "0".
-2. Could you check if the Cumulative count is doing correct. 
-
 # Import libraries
 import pandas as pd
 from datetime import datetime
 from ayx import Alteryx
 import re
 import warnings
+import numpy as np
 
 # Suppress the UserWarning from pandas about openpyxl
 warnings.simplefilter(action='ignore', category=UserWarning)
@@ -88,75 +85,70 @@ df_unpivoted['Weekly'] = df_unpivoted['New name']
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
 df_unpivoted['Milestone_Count'] = 1
 
-# --- Create cumulative data before pivoting ---
-df_dated_milestones = df_unpivoted.dropna(subset=['Status']).copy()
-df_dated_milestones['Week Label'] = df_dated_milestones['Status'].dt.isocalendar().week.astype(int).astype(str)
-df_dated_milestones['Month'] = df_dated_milestones['Status'].dt.strftime('%B %Y')
-
-# Sort data to ensure cumulative sum is calculated correctly
-df_dated_milestones = df_dated_milestones.sort_values(by=['Weekly', 'F/A', 'Status'])
-
-# Create cumulative rows with counts
-df_cumulative_rows = df_dated_milestones.groupby(['Weekly', 'F/A', 'Month', 'Week Label']).agg(
-    Cumulative_Count=('Milestone_Count', 'sum')
-).groupby(level=['Weekly', 'F/A']).cumsum().reset_index()
-df_cumulative_rows['Milestone_Count'] = df_cumulative_rows['Cumulative_Count']
-
-# Add " (Cumulative)" to the Weekly column and set Task Name to an empty string
-df_cumulative_rows['Weekly'] = df_cumulative_rows['Weekly'] + ' (Cumulative)'
-df_cumulative_rows['Task Name'] = ''
-
-# Combine original data and cumulative data for a single pivot
-df_combined = pd.concat([df_unpivoted, df_cumulative_rows], ignore_index=True, sort=False)
-df_combined['Week Label'] = df_combined['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
-df_combined['Month'] = df_combined['Status'].dt.strftime('%B %Y').fillna('No Date')
-df_combined['Milestone_Count'] = df_combined['Milestone_Count'].fillna(0)
-
+df_unpivoted['Week Label'] = df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
+df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
 
 # --- Step 6: Create weekly and monthly reports using pivot tables ---
+def sort_columns_by_date(df_pivot):
+    """Sorts the columns of a pivot table chronologically."""
+    def sort_key(col_tuple):
+        if isinstance(col_tuple, tuple):
+            month_str = col_tuple[0]
+        else:
+            month_str = col_tuple
+
+        if month_str == 'No Date':
+            return datetime.max.date()
+        try:
+            return datetime.strptime(month_str, '%B %Y').date()
+        except ValueError:
+            return datetime.max.date()
+
+    sorted_cols = sorted(df_pivot.columns, key=sort_key)
+    return df_pivot.reindex(columns=sorted_cols)
+
 # Weekly Report
 weekly_pivot = pd.pivot_table(
-    df_combined,
+    df_unpivoted,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
     columns=['Month', 'Week Label'],
     aggfunc='sum',
     fill_value=0
 )
-
-# Sort the columns chronologically
-weekly_pivot.columns = weekly_pivot.columns.to_flat_index()
-weekly_pivot.columns = pd.MultiIndex.from_tuples(weekly_pivot.columns)
-
-def sort_key(col_tuple):
-    # col_tuple is ('Month', 'Week Label')
-    month_str = col_tuple[0]
-    if month_str == 'No Date':
-        return (datetime.max.date(), '')
-    try:
-        return (datetime.strptime(month_str, '%B %Y').date(), col_tuple)
-    except ValueError:
-        return (datetime.max.date(), '')
-
-sorted_weekly_cols = sorted(weekly_pivot.columns, key=sort_key)
-weekly_pivot = weekly_pivot.reindex(columns=sorted_weekly_cols)
-final_weekly_report = weekly_pivot.copy()
-
+final_weekly_report = sort_columns_by_date(weekly_pivot)
 
 # Monthly Report
 monthly_pivot = pd.pivot_table(
-    df_combined,
+    df_unpivoted,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
     columns=['Month'],
     aggfunc='sum',
     fill_value=0
 )
+final_monthly_report = sort_columns_by_date(monthly_pivot)
 
-# Sort the columns chronologically
-sorted_monthly_cols = sorted(monthly_pivot.columns, key=lambda x: datetime.strptime(x, '%B %Y').date() if x != 'No Date' else datetime.max.date())
-monthly_pivot = monthly_pivot.reindex(columns=sorted_monthly_cols)
-final_monthly_report = monthly_pivot.copy()
+# --- Create and add cumulative rows to reports ---
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    # Create new DataFrame for cumulative rows
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], "") for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name']
+    )
+    
+    # Concatenate and sort
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+final_weekly_report = add_cumulative_rows(final_weekly_report)
+final_monthly_report = add_cumulative_rows(final_monthly_report)
 
 # --- Step 7: Write reports to multi-sheet Excel file ---
 today = datetime.today()
@@ -172,7 +164,14 @@ except Exception as e:
 # --- Step 8: Pass a DataFrame back to Alteryx ---
 final_weekly_report_flat = final_weekly_report.reset_index()
 # Rename columns to a flat list for Alteryx, handling the MultiIndex
-final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
+new_columns = []
+for col in final_weekly_report.columns:
+    if isinstance(col, tuple):
+        new_columns.append(f"{col[0]} - {col[1]}")
+    else:
+        new_columns.append(col)
+        
+final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + new_columns
 
 Alteryx.write(final_weekly_report_flat, 1)
 
