@@ -65,8 +65,18 @@ milestone_mapping = {
 
 def extract_names(milestone_str):
     # This regex is more robust, capturing the text after the year and ')'
-    match = re.search(r'\)\s(.*)', milestone_str)
-    milestone_name = match.group(1).strip() if match else milestone_str
+    # It also handles cases with only the milestone name after the 'V:'
+    match = re.search(r'V:\((?:F|A) \d{4}\) (.+)', milestone_str)
+    if match:
+        milestone_name = match.group(1).strip()
+    else:
+        # Fallback for headers without the year
+        match = re.search(r'V:\((?:F|A)\) (.+)', milestone_str)
+        if match:
+            milestone_name = match.group(1).strip()
+        else:
+            milestone_name = milestone_str
+    
     return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
 
 df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
@@ -132,4 +142,3 @@ final_weekly_report_flat = final_weekly_report.reset_index()
 final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
-
