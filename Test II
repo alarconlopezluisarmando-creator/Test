@@ -1,0 +1,189 @@
+Attached you can find the original code. 
+1. I need this milestone too and do the same that you did for the other. 
+V:(F 4600) SSV Submitted to Customer FWA-Finish		Forecast			MS4 - SSV Submitted - FWA
+V:(A 4600) SSV Submitted to Customer FWA-Finish		Actual			MS4 - SSV Submitted - FWA
+V:(F 4630) SSV Submitted to Customer Mobility-Finish		Forecast			MS4 - SSV Submitted
+V:(A 4630) SSV Submitted to Customer Mobility-Finish		Actual			MS4 - SSV Submitted
+
+2. In column name when we have the Month - weekly, I need to add the work "Week", so I need something like : March 2025 - Week 13
+4. Can you complete all the weeks for the year. I mean, if we dont have any data for some week, please add the week with "0" for all the rows. 
+
+# Import libraries
+import pandas as pd
+from datetime import datetime
+from ayx import Alteryx
+import re
+import warnings
+import numpy as np
+
+# Suppress the UserWarning from pandas about openpyxl
+warnings.simplefilter(action='ignore', category=UserWarning)
+
+# --- Step 2: Define file path and read data ---
+file_path = r"\\netapp\depts\Jannat\Viaero\BMS_TrackerProgress.xlsx"
+df = None
+
+try:
+    df = pd.read_excel(file_path, engine='openpyxl')
+    print("File read successfully.")
+except FileNotFoundError:
+    print(f"Error: File not found at {file_path}")
+    df = pd.DataFrame({'Error': ["File not found."]})
+except Exception as e:
+    print(f"Error reading file: {e}")
+    df = pd.DataFrame({'Error': [f"File reading failed: {e}"]})
+
+if 'Error' in df.columns:
+    Alteryx.write(df, 1)
+    exit()
+
+# --- Step 3: Unpivot the milestone data ---
+id_vars = [
+    'CL:Customer Name', 'P:Viaero Root ID', 'C:Site Name (SPMS)',
+    'WPK:Work Package Description', 'P:Project ID', 'C:Site ID',
+    'P:Viaero Phase', 'P:Viaero Project Type', 'P:Cluster ID',
+    'P:FWA (Existing)', 'P:FWA (Scope)', 'P:FWA (Final)',
+    'P:Mobility (Existing)', 'P:Mobility (Scope)', 'P:Mobility (Final)',
+    'M:Market', 'P:Project Class', 'P:Project Status'
+]
+
+milestone_cols = [col for col in df.columns if col.startswith('V:(')]
+df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
+
+# --- Step 4: Extract required columns from unpivoted data ---
+def extract_f_a(milestone_str):
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
+milestone_mapping = {
+    'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
+    'Ground Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE'),
+    'Tower Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE - Tower'),
+    '100% Construction Drawing Received-Finish': ('100% Construction Drawing Received-Finish', 'Pre-Con - Final Drawings'),
+    'Billing Milestone 1 Complete-Finish': ('Billing Milestone 1 Complete', 'Pre-Con - Ms1 Rev Rec'),
+    'Viaero Ground NTP Received-Finish': ('Viaero Ground NTP Received-Finish', 'Ground NTP'),
+    'Ground Construction Complete-Finish': ('Ground Construction Complete-Finish', 'BBU - Ground Install (sites)'),
+    'Billing Milestone 2 Complete-Finish': ('Billing Milestone 2 Complete', 'BBU - MS2 Rev Rec'),
+    'Viaero Tower NTP Received-Finish': ('Viaero Tower NTP Received-Finish', 'Tower NTP'),
+    'Tower Construction Start-Finish': ('Tower Construction Start', 'RRH - Tower CxS'),
+    'Tower Installation Complete-Finish': ('Tower Installation Complete', 'RRH - Tower CxC'),
+    'Billing Milestone 3 Complete-Finish': ('Billing Milestone 3 Complete', 'MS3 Rev Rec'),
+    'Billing Milestone 4 Complete-Finish': ('Billing Milestone 4 Complete', 'MS4 Rev Rec'),
+    'De-installed Equipment Return Completed-Finish': ('De-installed Equipment Return Completed', 'Cx Decom'),
+    'Site Acceptance-Finish': ('Site Acceptance', 'MS5 - Final Site Acceptance'),
+    'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec')
+}
+
+def extract_names(milestone_str):
+    match = re.search(r'V:\((?:F|A) \d{4}\) (.+)', milestone_str)
+    if match:
+        milestone_name = match.group(1).strip()
+    else:
+        match = re.search(r'V:\((?:F|A)\) (.+)', milestone_str)
+        if match:
+            milestone_name = match.group(1).strip()
+        else:
+            milestone_name = milestone_str
+    
+    return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
+
+df_unpivoted['F/A'] = df_unpivoted['Milestone'].apply(extract_f_a)
+df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda x: pd.Series(extract_names(x)))
+df_unpivoted['Weekly'] = df_unpivoted['New name']
+
+# --- Step 5: Prepare data for weekly and monthly reports ---
+df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
+df_unpivoted['Milestone_Count'] = 1
+
+df_unpivoted['Week Label'] = df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
+df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
+
+# --- Step 6: Create weekly and monthly reports using pivot tables ---
+def sort_columns_by_date(df_pivot):
+    """Sorts the columns of a pivot table chronologically."""
+    def sort_key(col_tuple):
+        if isinstance(col_tuple, tuple):
+            month_str = col_tuple[0]
+        else:
+            month_str = col_tuple
+
+        if month_str == 'No Date':
+            return datetime.max.date()
+        try:
+            return datetime.strptime(month_str, '%B %Y').date()
+        except ValueError:
+            return datetime.max.date()
+
+    sorted_cols = sorted(df_pivot.columns, key=sort_key)
+    return df_pivot.reindex(columns=sorted_cols)
+
+# Weekly Report
+weekly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month', 'Week Label'],
+    aggfunc='sum',
+    fill_value=0
+)
+final_weekly_report = sort_columns_by_date(weekly_pivot)
+
+# Monthly Report
+monthly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month'],
+    aggfunc='sum',
+    fill_value=0
+)
+final_monthly_report = sort_columns_by_date(monthly_pivot)
+
+# --- Create and add cumulative rows to reports ---
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    # Create new DataFrame for cumulative rows, now with 4 levels
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], "") for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+    )
+    
+    # Concatenate and sort
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+final_weekly_report = add_cumulative_rows(final_weekly_report)
+final_monthly_report = add_cumulative_rows(final_monthly_report)
+
+# --- Step 7: Write reports to multi-sheet Excel file ---
+today = datetime.today()
+output_filename = r"Viaero_BMS_ProgressTracker_" + today.strftime("%m.%d.%y") + "_OV MS rev1.xlsx"
+try:
+    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+        final_weekly_report.to_excel(writer, sheet_name='Weekly Report')
+        final_monthly_report.to_excel(writer, sheet_name='Monthly Report')
+    print(f"Report saved successfully to {output_filename}")
+except Exception as e:
+    print(f"Error writing to Excel file: {e}")
+
+# --- Step 8: Pass a DataFrame back to Alteryx ---
+final_weekly_report_flat = final_weekly_report.reset_index()
+# Rename columns to a flat list for Alteryx, handling the MultiIndex
+new_columns_weekly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
+final_weekly_report_flat.columns = new_columns_weekly
+
+final_monthly_report_flat = final_monthly_report.reset_index()
+# Rename columns to a flat list for Alteryx
+new_columns_monthly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [col for col in final_monthly_report.columns]
+final_monthly_report_flat.columns = new_columns_monthly
+
+# Pass the weekly report to Alteryx output 1
+Alteryx.write(final_weekly_report_flat, 1)
+
+# Pass the monthly report to Alteryx output 2
+Alteryx.write(final_monthly_report_flat, 2)
