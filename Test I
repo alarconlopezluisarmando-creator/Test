@@ -81,23 +81,38 @@ df_unpivoted[['Task Name', 'New name']] = df_unpivoted['Milestone'].apply(lambda
 df_unpivoted['Weekly'] = df_unpivoted['New name']
 
 # --- Step 5: Prepare data for weekly and monthly reports ---
-# Convert 'Status' column to datetime, forcing invalid dates to NaT
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
+df_unpivoted['Milestone_Count'] = 1
 
-# Filter for rows with valid dates for the report
-df_with_dates = df_unpivoted.dropna(subset=['Status']).copy()
+# --- Create cumulative data before pivoting ---
+df_dated_milestones = df_unpivoted.dropna(subset=['Status']).copy()
+df_dated_milestones['Week Label'] = df_dated_milestones['Status'].dt.isocalendar().week.astype(int).astype(str)
+df_dated_milestones['Month'] = df_dated_milestones['Status'].dt.strftime('%B %Y')
 
-# Add a 'Milestone_Count' column for aggregation
-df_with_dates['Milestone_Count'] = 1
+# Sort data to ensure cumulative sum is calculated correctly
+df_dated_milestones = df_dated_milestones.sort_values(by=['Weekly', 'F/A', 'Status'])
 
-# Create 'Week of Year' and 'Month_Year' columns for pivoting
-df_with_dates['Week Label'] = 'Week ' + df_with_dates['Status'].dt.isocalendar().week.astype(str)
-df_with_dates['Month'] = df_with_dates['Status'].dt.strftime('%B %Y')
+# Create cumulative rows with counts
+df_cumulative_rows = df_dated_milestones.groupby(['Weekly', 'F/A', 'Month', 'Week Label']).agg(
+    Cumulative_Count=('Milestone_Count', 'sum')
+).groupby(level=['Weekly', 'F/A']).cumsum().reset_index()
+df_cumulative_rows['Milestone_Count'] = df_cumulative_rows['Cumulative_Count']
+
+# Add " (Cumulative)" to the Weekly column and set Task Name to an empty string
+df_cumulative_rows['Weekly'] = df_cumulative_rows['Weekly'] + ' (Cumulative)'
+df_cumulative_rows['Task Name'] = ''
+
+# Combine original data and cumulative data for a single pivot
+df_combined = pd.concat([df_unpivoted, df_cumulative_rows], ignore_index=True, sort=False)
+df_combined['Week Label'] = df_combined['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+df_combined['Month'] = df_combined['Status'].dt.strftime('%B %Y').fillna('No Date')
+df_combined['Milestone_Count'] = df_combined['Milestone_Count'].fillna(0)
+
 
 # --- Step 6: Create weekly and monthly reports using pivot tables ---
 # Weekly Report
 weekly_pivot = pd.pivot_table(
-    df_with_dates,
+    df_combined,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
     columns=['Month', 'Week Label'],
@@ -105,15 +120,28 @@ weekly_pivot = pd.pivot_table(
     fill_value=0
 )
 
-# Sort the columns of the weekly pivot table chronologically
+# Sort the columns chronologically
 weekly_pivot.columns = weekly_pivot.columns.to_flat_index()
 weekly_pivot.columns = pd.MultiIndex.from_tuples(weekly_pivot.columns)
-sorted_weekly_cols = sorted(weekly_pivot.columns, key=lambda x: datetime.strptime(x[0], '%B %Y').date())
-final_weekly_report = weekly_pivot.reindex(columns=sorted_weekly_cols)
+
+def sort_key(col_tuple):
+    # col_tuple is ('Month', 'Week Label')
+    month_str = col_tuple[0]
+    if month_str == 'No Date':
+        return (datetime.max.date(), '')
+    try:
+        return (datetime.strptime(month_str, '%B %Y').date(), col_tuple)
+    except ValueError:
+        return (datetime.max.date(), '')
+
+sorted_weekly_cols = sorted(weekly_pivot.columns, key=sort_key)
+weekly_pivot = weekly_pivot.reindex(columns=sorted_weekly_cols)
+final_weekly_report = weekly_pivot.copy()
+
 
 # Monthly Report
 monthly_pivot = pd.pivot_table(
-    df_with_dates,
+    df_combined,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name'],
     columns=['Month'],
@@ -121,9 +149,10 @@ monthly_pivot = pd.pivot_table(
     fill_value=0
 )
 
-# Sort the columns of the monthly pivot table chronologically
-sorted_monthly_cols = sorted(monthly_pivot.columns, key=lambda x: datetime.strptime(x, '%B %Y').date())
-final_monthly_report = monthly_pivot.reindex(columns=sorted_monthly_cols)
+# Sort the columns chronologically
+sorted_monthly_cols = sorted(monthly_pivot.columns, key=lambda x: datetime.strptime(x, '%B %Y').date() if x != 'No Date' else datetime.max.date())
+monthly_pivot = monthly_pivot.reindex(columns=sorted_monthly_cols)
+final_monthly_report = monthly_pivot.copy()
 
 # --- Step 7: Write reports to multi-sheet Excel file ---
 today = datetime.today()
@@ -137,9 +166,8 @@ except Exception as e:
     print(f"Error writing to Excel file: {e}")
 
 # --- Step 8: Pass a DataFrame back to Alteryx ---
-# Flatten the weekly report for Alteryx
 final_weekly_report_flat = final_weekly_report.reset_index()
-# Rename columns to a flat list for Alteryx
+# Rename columns to a flat list for Alteryx, handling the MultiIndex
 final_weekly_report_flat.columns = ['Weekly', 'F/A', 'Task Name'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 
 Alteryx.write(final_weekly_report_flat, 1)
