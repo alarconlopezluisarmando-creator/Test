@@ -1691,7 +1691,45 @@ final_monthly_report_flat.columns = new_columns_monthly
 Alteryx.write(final_weekly_report_flat, 1)
 Alteryx.write(final_monthly_report_flat, 2)
 
+Error:
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+<ipython-input-3-f8bf9768e589> in <module>
+    165     weekly_pivot[col] = 0
+    166 
+--> 167 final_weekly_report = sort_weekly_columns(weekly_pivot)
+    168 
+    169 # Monthly Report
 
+<ipython-input-3-f8bf9768e589> in sort_weekly_columns(df_pivot)
+    107     """Sorts weekly columns in chronological order."""
+    108     cols = [col for col in df_pivot.columns if 'No Date' not in col]
+--> 109     sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'1 {x[0]} {x[1].replace("Week ", "")}', '%d %B %Y Week %W'))
+    110     if ('No Date', 'No Date') in df_pivot.columns:
+    111         sorted_cols.append(('No Date', 'No Date'))
+
+<ipython-input-3-f8bf9768e589> in <lambda>(x)
+    107     """Sorts weekly columns in chronological order."""
+    108     cols = [col for col in df_pivot.columns if 'No Date' not in col]
+--> 109     sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'1 {x[0]} {x[1].replace("Week ", "")}', '%d %B %Y Week %W'))
+    110     if ('No Date', 'No Date') in df_pivot.columns:
+    111         sorted_cols.append(('No Date', 'No Date'))
+
+c:\users\l5.lopez\appdata\local\alteryx\bin\miniconda3\envs\designerbasetools_venv\lib\_strptime.py in _strptime_datetime(cls, data_string, format)
+    566     """Return a class cls instance based on the input string and the
+    567     format string."""
+--> 568     tt, fraction, gmtoff_fraction = _strptime(data_string, format)
+    569     tzname, gmtoff = tt[-2:]
+    570     args = tt[:6] + (fraction,)
+
+c:\users\l5.lopez\appdata\local\alteryx\bin\miniconda3\envs\designerbasetools_venv\lib\_strptime.py in _strptime(data_string, format)
+    347     found = format_regex.match(data_string)
+    348     if not found:
+--> 349         raise ValueError("time data %r does not match format %r" %
+    350                          (data_string, format))
+    351     if len(data_string) != found.end():
+
+ValueError: time data '1 April 2025 14' does not match format '%d %B %Y Week %W'
 
 
 
