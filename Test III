@@ -88,51 +88,8 @@ df_unpivoted['Weekly'] = df_unpivoted['New name']
 
 # --- Step 5: Prepare data for weekly and monthly reports ---
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
-df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
-df_unpivoted['Milestone_Count'] = 1
 
-# --- FIX: Pad the week number with a leading zero to prevent ValueError ---
-df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.astype(int).astype(str).str.zfill(2)
-
-df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
-df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
-
-# --- Step 6: Create weekly and monthly reports using pivot tables (UPDATED) ---
-def sort_monthly_columns(df_pivot):
-    """Sorts monthly columns in chronological order."""
-    cols = [col for col in df_pivot.columns if col != 'No Date']
-    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(x, '%B %Y'))
-    if 'No Date' in df_pivot.columns:
-        sorted_cols.append('No Date')
-    return df_pivot.reindex(columns=sorted_cols)
-
-def sort_weekly_columns(df_pivot):
-    """Sorts weekly columns in chronological order."""
-    cols = [col for col in df_pivot.columns if 'No Date' not in col]
-    
-    # --- FIX: Correct the lambda function to match the padded week format ---
-    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'{x[0]} {x[1]}', '%B %Y Week %W'))
-    
-    if ('No Date', 'No Date') in df_pivot.columns:
-        sorted_cols.append(('No Date', 'No Date'))
-    return df_pivot.reindex(columns=sorted_cols)
-
-def add_cumulative_rows(df_report):
-    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
-    for index, row in df_report.iterrows():
-        cumulative_row = np.cumsum(row.values)
-        df_cumulative.loc[index] = cumulative_row
-
-    df_cumulative.index = pd.MultiIndex.from_tuples(
-        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], idx[3]) for idx in df_cumulative.index],
-        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
-    )
-    
-    final_df = pd.concat([df_report, df_cumulative]).sort_index()
-    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
-
-
-# --- FIX: Create a complete index for all milestone combinations ---
+# --- NEW: Get all unique milestone combinations before filtering by date
 complete_index = pd.MultiIndex.from_product(
     [
         df_unpivoted['Weekly'].unique(),
@@ -143,6 +100,58 @@ complete_index = pd.MultiIndex.from_product(
     names=['Weekly', 'F/A', 'Task Name', 'Milestone']
 )
 
+# Filter to show all data from 2025 onwards
+df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
+
+df_unpivoted['Milestone_Count'] = 1
+df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
+df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
+
+# --- Step 6: Create weekly and monthly reports using pivot tables (UPDATED) ---
+def sort_columns_by_date(df_pivot):
+    """Sorts the columns of a pivot table chronologically."""
+    def sort_key(col):
+        if isinstance(col, tuple):
+            month_str, week_str = col
+            is_no_date = month_str == 'No Date'
+        else:
+            month_str = col
+            is_no_date = month_str == 'No Date'
+        
+        if is_no_date:
+            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
+        
+        try:
+            if isinstance(col, tuple):
+                month_year_dt = datetime.strptime(month_str, '%B %Y')
+                week_num = int(re.sub(r'\D', '', week_str)) # Handles 'Week 1', 'Week 01'
+                return (month_year_dt.year, month_year_dt.month, week_num)
+            else:
+                return (datetime.strptime(month_str, '%B %Y').year, datetime.strptime(month_str, '%B %Y').month)
+        except ValueError:
+            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
+
+    sorted_cols = sorted(df_pivot.columns, key=sort_key)
+    return df_pivot.reindex(columns=sorted_cols)
+
+def get_all_weeks_in_year():
+    """Generates all week labels for the current year."""
+    all_weeks = []
+    current_year = datetime.now().year
+    
+    for week in range(1, 54):
+        try:
+            date_for_week = datetime.strptime(f'{current_year}-W{week}-1', "%Y-W%W-%w")
+            month_label = date_for_week.strftime('%B %Y')
+            week_label = f'Week {week}'
+            all_weeks.append((month_label, week_label))
+        except ValueError:
+            continue
+    return all_weeks
+
+all_week_cols = get_all_weeks_in_year()
+
 # Weekly Report
 weekly_pivot = pd.pivot_table(
     df_unpivoted,
@@ -152,29 +161,15 @@ weekly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- FIX: Reindex the pivot table to include all combinations ---
+# --- NEW: Reindex the pivot table to include all combinations ---
 weekly_pivot = weekly_pivot.reindex(complete_index, fill_value=0)
-
-all_years = sorted(df_unpivoted['Status'].dt.year.dropna().unique())
-all_week_cols = []
-for year in all_years:
-    for week in range(1, 54):
-        try:
-            date_for_week = datetime.strptime(f'{year}-W{week}-1', "%Y-W%W-%w")
-            month_label = date_for_week.strftime('%B %Y')
-            
-            # --- FIX: Pad the week number here as well ---
-            week_label = f'Week {str(week).zfill(2)}'
-            all_week_cols.append((month_label, week_label))
-        except ValueError:
-            continue
 
 current_cols = set(weekly_pivot.columns)
 missing_cols = [col for col in all_week_cols if col not in current_cols]
 for col in missing_cols:
     weekly_pivot[col] = 0
 
-final_weekly_report = sort_weekly_columns(weekly_pivot)
+final_weekly_report = sort_columns_by_date(weekly_pivot)
 
 # Monthly Report
 monthly_pivot = pd.pivot_table(
@@ -185,12 +180,26 @@ monthly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- FIX: Reindex the monthly report to include all combinations ---
+# --- NEW: Reindex the monthly report to include all combinations ---
 monthly_pivot = monthly_pivot.reindex(complete_index, fill_value=0)
 
-final_monthly_report = sort_monthly_columns(monthly_pivot)
+final_monthly_report = sort_columns_by_date(monthly_pivot)
 
 # --- Create and add cumulative rows to reports ---
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], "") for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+    )
+    
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
 final_weekly_report = add_cumulative_rows(final_weekly_report)
 final_monthly_report = add_cumulative_rows(final_monthly_report)
 
