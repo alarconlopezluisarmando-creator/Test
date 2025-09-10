@@ -90,29 +90,14 @@ df_unpivoted['Weekly'] = df_unpivoted['New name']
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
 df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
 df_unpivoted['Milestone_Count'] = 1
-df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+
+# --- FIX: Pad the week number with a leading zero to prevent ValueError ---
+df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.astype(int).astype(str).str.zfill(2)
+
 df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
 df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
 
-
-# ----------------------------------------------------------------------------------------------------------------------
-# --- NEW STEP: Ensure all milestone combinations are present before pivoting ---
-# ----------------------------------------------------------------------------------------------------------------------
-# Get all unique combinations of the milestone-related columns from the unpivoted data
-unique_combinations = df_unpivoted[['Weekly', 'F/A', 'Task Name', 'Milestone']].drop_duplicates().reset_index(drop=True)
-
-# Create new rows for these combinations with a count of 0 and no date
-unique_combinations['Status'] = pd.NaT
-unique_combinations['Milestone_Count'] = 0
-unique_combinations['Week Label'] = 'No Date'
-unique_combinations['Month'] = 'No Date'
-
-# Concatenate these "dummy" rows with the original data
-# The pivot table will now have a row for every milestone, even if it has no data
-df_unpivoted_complete = pd.concat([df_unpivoted, unique_combinations], ignore_index=True)
-df_unpivoted_complete['Status'] = pd.to_datetime(df_unpivoted_complete['Status'], errors='coerce')
-
-# --- Step 6: Create weekly and monthly reports using pivot tables (NOW WORKS CORRECTLY) ---
+# --- Step 6: Create weekly and monthly reports using pivot tables (UPDATED) ---
 def sort_monthly_columns(df_pivot):
     """Sorts monthly columns in chronological order."""
     cols = [col for col in df_pivot.columns if col != 'No Date']
@@ -124,30 +109,62 @@ def sort_monthly_columns(df_pivot):
 def sort_weekly_columns(df_pivot):
     """Sorts weekly columns in chronological order."""
     cols = [col for col in df_pivot.columns if 'No Date' not in col]
-    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'{x[0]} - {x[1].replace("Week ", "")}-1', '%B %Y - %W-%w'))
+    
+    # --- FIX: Correct the lambda function to match the padded week format ---
+    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'{x[0]} {x[1]}', '%B %Y Week %W'))
     
     if ('No Date', 'No Date') in df_pivot.columns:
         sorted_cols.append(('No Date', 'No Date'))
     return df_pivot.reindex(columns=sorted_cols)
 
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], idx[3]) for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+    )
+    
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+
+# --- FIX: Create a complete index for all milestone combinations ---
+complete_index = pd.MultiIndex.from_product(
+    [
+        df_unpivoted['Weekly'].unique(),
+        df_unpivoted['F/A'].unique(),
+        df_unpivoted['Task Name'].unique(),
+        df_unpivoted['Milestone'].unique()
+    ],
+    names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+)
+
 # Weekly Report
 weekly_pivot = pd.pivot_table(
-    df_unpivoted_complete,  # Use the new, complete DataFrame
+    df_unpivoted,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
     columns=['Month', 'Week Label'],
     aggfunc='sum',
     fill_value=0
 )
+# --- FIX: Reindex the pivot table to include all combinations ---
+weekly_pivot = weekly_pivot.reindex(complete_index, fill_value=0)
 
-all_years = sorted(df_unpivoted_complete['Status'].dt.year.dropna().unique())
+all_years = sorted(df_unpivoted['Status'].dt.year.dropna().unique())
 all_week_cols = []
 for year in all_years:
     for week in range(1, 54):
         try:
             date_for_week = datetime.strptime(f'{year}-W{week}-1', "%Y-W%W-%w")
             month_label = date_for_week.strftime('%B %Y')
-            week_label = f'Week {week}'
+            
+            # --- FIX: Pad the week number here as well ---
+            week_label = f'Week {str(week).zfill(2)}'
             all_week_cols.append((month_label, week_label))
         except ValueError:
             continue
@@ -161,31 +178,19 @@ final_weekly_report = sort_weekly_columns(weekly_pivot)
 
 # Monthly Report
 monthly_pivot = pd.pivot_table(
-    df_unpivoted_complete, # Use the new, complete DataFrame
+    df_unpivoted,
     values='Milestone_Count',
     index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
     columns=['Month'],
     aggfunc='sum',
     fill_value=0
 )
+# --- FIX: Reindex the monthly report to include all combinations ---
+monthly_pivot = monthly_pivot.reindex(complete_index, fill_value=0)
 
 final_monthly_report = sort_monthly_columns(monthly_pivot)
 
 # --- Create and add cumulative rows to reports ---
-def add_cumulative_rows(df_report):
-    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
-    for index, row in df_report.iterrows():
-        cumulative_row = np.cumsum(row.values)
-        df_cumulative.loc[index] = cumulative_row
-
-    df_cumulative.index = pd.MultiIndex.from_tuples(
-        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], "") for idx in df_cumulative.index],
-        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
-    )
-    
-    final_df = pd.concat([df_report, df_cumulative]).sort_index()
-    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
-
 final_weekly_report = add_cumulative_rows(final_weekly_report)
 final_monthly_report = add_cumulative_rows(final_monthly_report)
 
