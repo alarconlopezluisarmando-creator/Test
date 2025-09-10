@@ -89,17 +89,6 @@ df_unpivoted['Weekly'] = df_unpivoted['New name']
 # --- Step 5: Prepare data for weekly and monthly reports ---
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
 
-# --- NEW: Get all unique milestone combinations before filtering by date
-complete_index = pd.MultiIndex.from_product(
-    [
-        df_unpivoted['Weekly'].unique(),
-        df_unpivoted['F/A'].unique(),
-        df_unpivoted['Task Name'].unique(),
-        df_unpivoted['Milestone'].unique()
-    ],
-    names=['Weekly', 'F/A', 'Task Name', 'Milestone']
-)
-
 # Filter to show all data from 2025 onwards
 df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
 
@@ -124,8 +113,9 @@ def sort_columns_by_date(df_pivot):
         
         try:
             if isinstance(col, tuple):
+                # The regex handles both 'Week 1' and 'Week 01' by extracting the number
                 month_year_dt = datetime.strptime(month_str, '%B %Y')
-                week_num = int(re.sub(r'\D', '', week_str)) # Handles 'Week 1', 'Week 01'
+                week_num = int(re.sub(r'\D', '', week_str))
                 return (month_year_dt.year, month_year_dt.month, week_num)
             else:
                 return (datetime.strptime(month_str, '%B %Y').year, datetime.strptime(month_str, '%B %Y').month)
@@ -135,22 +125,16 @@ def sort_columns_by_date(df_pivot):
     sorted_cols = sorted(df_pivot.columns, key=sort_key)
     return df_pivot.reindex(columns=sorted_cols)
 
-def get_all_weeks_in_year():
-    """Generates all week labels for the current year."""
-    all_weeks = []
-    current_year = datetime.now().year
-    
-    for week in range(1, 54):
-        try:
-            date_for_week = datetime.strptime(f'{current_year}-W{week}-1', "%Y-W%W-%w")
-            month_label = date_for_week.strftime('%B %Y')
-            week_label = f'Week {week}'
-            all_weeks.append((month_label, week_label))
-        except ValueError:
-            continue
-    return all_weeks
-
-all_week_cols = get_all_weeks_in_year()
+# --- NEW: Create a complete index for all milestone combinations ---
+complete_index = pd.MultiIndex.from_product(
+    [
+        df_unpivoted['Weekly'].unique(),
+        df_unpivoted['F/A'].unique(),
+        df_unpivoted['Task Name'].unique(),
+        df_unpivoted['Milestone'].unique()
+    ],
+    names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+)
 
 # Weekly Report
 weekly_pivot = pd.pivot_table(
@@ -161,13 +145,8 @@ weekly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- NEW: Reindex the pivot table to include all combinations ---
+# --- Reindex the pivot table to include all combinations ---
 weekly_pivot = weekly_pivot.reindex(complete_index, fill_value=0)
-
-current_cols = set(weekly_pivot.columns)
-missing_cols = [col for col in all_week_cols if col not in current_cols]
-for col in missing_cols:
-    weekly_pivot[col] = 0
 
 final_weekly_report = sort_columns_by_date(weekly_pivot)
 
@@ -180,7 +159,7 @@ monthly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- NEW: Reindex the monthly report to include all combinations ---
+# --- Reindex the monthly report to include all combinations ---
 monthly_pivot = monthly_pivot.reindex(complete_index, fill_value=0)
 
 final_monthly_report = sort_columns_by_date(monthly_pivot)
@@ -225,10 +204,3 @@ final_monthly_report_flat.columns = new_columns_monthly
 
 Alteryx.write(final_weekly_report_flat, 1)
 Alteryx.write(final_monthly_report_flat, 2)
-
-Weekly	F/A	Task Name	Custom name	Milestone	January 2025 - Week 1	January 2025 - Week 2	January 2025 - Week 3	January 2025 - Week 4	February 2025 - Week 5	February 2025 - Week 6	February 2025 - Week 7	February 2025 - Week 8	March 2025 - Week 9	March 2025 - Week 10	March 2025 - Week 11	March 2025 - Week 12	March 2025 - Week 13	April 2025 - Week 14	April 2025 - Week 15	April 2025 - Week 16	April 2025 - Week 17	April 2025 - Week 18	May 2025 - Week 18	May 2025 - Week 19	May 2025 - Week 20	May 2025 - Week 21	May 2025 - Week 22	June 2025 - Week 22	June 2025 - Week 23	June 2025 - Week 24	June 2025 - Week 25	June 2025 - Week 26	June 2025 - Week 27	July 2025 - Week 27	July 2025 - Week 28	July 2025 - Week 29	July 2025 - Week 30	July 2025 - Week 31	August 2025 - Week 31	August 2025 - Week 32	August 2025 - Week 33	August 2025 - Week 34	August 2025 - Week 35	September 2025 - Week 35	September 2025 - Week 36	September 2025 - Week 37	September 2025 - Week 38	September 2025 - Week 39	September 2025 - Week 40	October 2025 - Week 40	October 2025 - Week 41	October 2025 - Week 42	October 2025 - Week 43	October 2025 - Week 44	November 2025 - Week 44	November 2025 - Week 45	November 2025 - Week 46	November 2025 - Week 47	November 2025 - Week 48	December 2025 - Week 1	December 2025 - Week 48	December 2025 - Week 49	December 2025 - Week 50	December 2025 - Week 51	December 2025 - Week 52	January 2026 - Week 53	January 2026 - Week 1	January 2026 - Week 2	January 2026 - Week 3	January 2026 - Week 4	January 2026 - Week 5	February 2026 - Week 6	February 2026 - Week 7	February 2026 - Week 8	February 2026 - Week 9	March 2026 - Week 10	March 2026 - Week 11	March 2026 - Week 12	March 2026 - Week 13	March 2026 - Week 14	April 2026 - Week 14	April 2026 - Week 15	April 2026 - Week 16	April 2026 - Week 17	April 2026 - Week 18	May 2026 - Week 18	May 2026 - Week 19	May 2026 - Week 20	May 2026 - Week 21	May 2026 - Week 22	June 2026 - Week 23	June 2026 - Week 24	June 2026 - Week 25	June 2026 - Week 26	June 2026 - Week 27	July 2026 - Week 27	July 2026 - Week 28	July 2026 - Week 29	July 2026 - Week 30	July 2026 - Week 31	August 2026 - Week 32	August 2026 - Week 33	August 2026 - Week 34	August 2026 - Week 35	August 2026 - Week 36	September 2026 - Week 36	September 2026 - Week 37	September 2026 - Week 38	September 2026 - Week 39	September 2026 - Week 40	October 2026 - Week 40	October 2026 - Week 41	October 2026 - Week 42	October 2026 - Week 43	October 2026 - Week 44	November 2026 - Week 45	November 2026 - Week 46	November 2026 - Week 47	November 2026 - Week 48	November 2026 - Week 49	December 2026 - Week 50	December 2026 - Week 51	December 2026 - Week 52	December 2026 - Week 53	January 2027 - Week 1	January 2027 - Week 2	January 2027 - Week 3	January 2027 - Week 4	February 2027 - Week 5	February 2027 - Week 6	February 2027 - Week 7	February 2027 - Week 8	March 2027 - Week 9	March 2027 - Week 10	March 2027 - Week 11	March 2027 - Week 12	April 2027 - Week 13
-BMS2 Cx Complete	Actual	100% Construction Drawing Received-Finish	BBU - Ground Install (sites)	V:(A 1120) Site Audit Walk Package Received-Finish	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
-BMS2 Cx Complete	Actual	100% Construction Drawing Received-Finish	BBU - Ground Install (sites)	V:(A 1125) Ground Cabling BOM Received-Finish	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
-BMS2 Cx Complete	Actual	100% Construction Drawing Received-Finish	BBU - Ground Install (sites)	V:(A 1127) Tower Cabling BOM Received-Finish	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
-BMS2 Cx Complete	Actual	100% Construction Drawing Received-Finish	BBU - Ground Install (sites)	V:(A 1146) 100% Construction Drawing Received-Finish	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
-
