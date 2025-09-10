@@ -1481,5 +1481,98 @@ final_monthly_report_flat.columns = new_columns_monthly
 Alteryx.write(final_weekly_report_flat, 1)
 Alteryx.write(final_monthly_report_flat, 2)
 
+Code v8.
+
+
+# --- Step 6: Create weekly and monthly reports using pivot tables ---
+def sort_monthly_columns(df_pivot):
+    """Sorts monthly columns in chronological order."""
+    cols = [col for col in df_pivot.columns if col != 'No Date']
+    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(x, '%B %Y'))
+    if 'No Date' in df_pivot.columns:
+        sorted_cols.append('No Date')
+    return df_pivot.reindex(columns=sorted_cols)
+
+def sort_weekly_columns(df_pivot):
+    """Sorts weekly columns in chronological order."""
+    cols = [col for col in df_pivot.columns if 'No Date' not in col]
+    sorted_cols = sorted(cols, key=lambda x: datetime.strptime(f'1 {x[0]} {x[1].replace("Week ", "")}', '%d %B %Y Week %W'))
+    if ('No Date', 'No Date') in df_pivot.columns:
+        sorted_cols.append(('No Date', 'No Date'))
+    return df_pivot.reindex(columns=sorted_cols)
+
+def add_cumulative_rows(df_report):
+    df_cumulative = pd.DataFrame(index=df_report.index, columns=df_report.columns).fillna(0)
+    for index, row in df_report.iterrows():
+        cumulative_row = np.cumsum(row.values)
+        df_cumulative.loc[index] = cumulative_row
+
+    df_cumulative.index = pd.MultiIndex.from_tuples(
+        [(f"{idx[0]} (Cumulative)", idx[1], idx[2], idx[3]) for idx in df_cumulative.index],
+        names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+    )
+    
+    final_df = pd.concat([df_report, df_cumulative]).sort_index()
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+
+# --- NEW: Create a complete index for all possible milestone combinations ---
+complete_index = pd.MultiIndex.from_product(
+    [
+        df_unpivoted['Weekly'].unique(),
+        df_unpivoted['F/A'].unique(),
+        df_unpivoted['Task Name'].unique(),
+        df_unpivoted['Milestone'].unique()
+    ],
+    names=['Weekly', 'F/A', 'Task Name', 'Milestone']
+)
+
+# Weekly Report
+weekly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month', 'Week Label'],
+    aggfunc='sum',
+    fill_value=0
+).reindex(complete_index, fill_value=0) # Reindex with the complete index
+
+all_years = sorted(df_unpivoted['Status'].dt.year.dropna().unique())
+all_week_cols = []
+for year in all_years:
+    for week in range(1, 54):
+        try:
+            date_for_week = datetime.strptime(f'{year}-W{week}-1', "%Y-W%W-%w")
+            month_label = date_for_week.strftime('%B %Y')
+            week_label = f'Week {week}'
+            all_week_cols.append((month_label, week_label))
+        except ValueError:
+            continue
+
+current_cols = set(weekly_pivot.columns)
+missing_cols = [col for col in all_week_cols if col not in current_cols]
+for col in missing_cols:
+    weekly_pivot[col] = 0
+
+final_weekly_report = sort_weekly_columns(weekly_pivot)
+
+# Monthly Report
+monthly_pivot = pd.pivot_table(
+    df_unpivoted,
+    values='Milestone_Count',
+    index=['Weekly', 'F/A', 'Task Name', 'Milestone'],
+    columns=['Month'],
+    aggfunc='sum',
+    fill_value=0
+).reindex(complete_index, fill_value=0) # Reindex with the complete index
+
+final_monthly_report = sort_monthly_columns(monthly_pivot)
+
+# --- Step 7: Write reports to multi-sheet Excel file ---
+# ... rest of the code is unchanged ...
+
+
+
+
 
 
