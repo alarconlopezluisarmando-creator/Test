@@ -1,13 +1,19 @@
-Continue code BMS report...
+Attached you can find the original code. 
+1. I need this milestone too and do the same that you did for the other. 
+V:(F 4600) SSV Submitted to Customer FWA-Finish		Forecast			MS4 - SSV Submitted - FWA
+V:(A 4600) SSV Submitted to Customer FWA-Finish		Actual			MS4 - SSV Submitted - FWA
+V:(F 4630) SSV Submitted to Customer Mobility-Finish		Forecast			MS4 - SSV Submitted
+V:(A 4630) SSV Submitted to Customer Mobility-Finish		Actual			MS4 - SSV Submitted
+
+2. In column name when we have the Month - weekly, I need to add the work "Week", so I need something like : March 2025 - Week 13
 
 # Import libraries
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from ayx import Alteryx
 import re
 import warnings
 import numpy as np
-from calendar import monthrange
 
 # Suppress the UserWarning from pandas about openpyxl
 warnings.simplefilter(action='ignore', category=UserWarning)
@@ -64,9 +70,7 @@ milestone_mapping = {
     'Billing Milestone 4 Complete-Finish': ('Billing Milestone 4 Complete', 'MS4 Rev Rec'),
     'De-installed Equipment Return Completed-Finish': ('De-installed Equipment Return Completed', 'Cx Decom'),
     'Site Acceptance-Finish': ('Site Acceptance', 'MS5 - Final Site Acceptance'),
-    'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec'),
-    'SSV Submitted to Customer FWA-Finish': ('SSV Submitted to Customer FWA-Finish', 'MS4 - SSV Submitted - FWA'),
-    'SSV Submitted to Customer Mobility-Finish': ('SSV Submitted to Customer Mobility-Finish', 'MS4 - SSV Submitted')
+    'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete', 'MS5 - Final Site Acceptance Rev Rec')
 }
 
 def extract_names(milestone_str):
@@ -88,53 +92,30 @@ df_unpivoted['Weekly'] = df_unpivoted['New name']
 
 # --- Step 5: Prepare data for weekly and monthly reports ---
 df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
-
-# Filter to show all data from 2025 onwards
-df_unpivoted = df_unpivoted[df_unpivoted['Status'].dt.year >= 2025]
-
 df_unpivoted['Milestone_Count'] = 1
-df_unpivoted['Week Label'] = 'Week ' + df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
+
+df_unpivoted['Week Label'] = df_unpivoted['Status'].dt.isocalendar().week.fillna(0).astype(int).astype(str).replace('0', 'No Date')
 df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
 df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
 
-# --- Step 6: Create weekly and monthly reports using pivot tables (UPDATED) ---
+# --- Step 6: Create weekly and monthly reports using pivot tables ---
 def sort_columns_by_date(df_pivot):
     """Sorts the columns of a pivot table chronologically."""
-    def sort_key(col):
-        if isinstance(col, tuple):
-            month_str, week_str = col
-            is_no_date = month_str == 'No Date'
+    def sort_key(col_tuple):
+        if isinstance(col_tuple, tuple):
+            month_str = col_tuple[0]
         else:
-            month_str = col
-            is_no_date = month_str == 'No Date'
-        
-        if is_no_date:
-            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
-        
+            month_str = col_tuple
+
+        if month_str == 'No Date':
+            return datetime.max.date()
         try:
-            if isinstance(col, tuple):
-                # The regex handles both 'Week 1' and 'Week 01' by extracting the number
-                month_year_dt = datetime.strptime(month_str, '%B %Y')
-                week_num = int(re.sub(r'\D', '', week_str))
-                return (month_year_dt.year, month_year_dt.month, week_num)
-            else:
-                return (datetime.strptime(month_str, '%B %Y').year, datetime.strptime(month_str, '%B %Y').month)
+            return datetime.strptime(month_str, '%B %Y').date()
         except ValueError:
-            return (datetime.max.year, datetime.max.month, datetime.max.day, 999)
+            return datetime.max.date()
 
     sorted_cols = sorted(df_pivot.columns, key=sort_key)
     return df_pivot.reindex(columns=sorted_cols)
-
-# --- NEW: Create a complete index for all milestone combinations ---
-complete_index = pd.MultiIndex.from_product(
-    [
-        df_unpivoted['Weekly'].unique(),
-        df_unpivoted['F/A'].unique(),
-        df_unpivoted['Task Name'].unique(),
-        df_unpivoted['Milestone'].unique()
-    ],
-    names=['Weekly', 'F/A', 'Task Name', 'Milestone']
-)
 
 # Weekly Report
 weekly_pivot = pd.pivot_table(
@@ -145,9 +126,6 @@ weekly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- Reindex the pivot table to include all combinations ---
-weekly_pivot = weekly_pivot.reindex(complete_index, fill_value=0)
-
 final_weekly_report = sort_columns_by_date(weekly_pivot)
 
 # Monthly Report
@@ -159,9 +137,6 @@ monthly_pivot = pd.pivot_table(
     aggfunc='sum',
     fill_value=0
 )
-# --- Reindex the monthly report to include all combinations ---
-monthly_pivot = monthly_pivot.reindex(complete_index, fill_value=0)
-
 final_monthly_report = sort_columns_by_date(monthly_pivot)
 
 # --- Create and add cumulative rows to reports ---
@@ -171,11 +146,13 @@ def add_cumulative_rows(df_report):
         cumulative_row = np.cumsum(row.values)
         df_cumulative.loc[index] = cumulative_row
 
+    # Create new DataFrame for cumulative rows, now with 4 levels
     df_cumulative.index = pd.MultiIndex.from_tuples(
         [(f"{idx[0]} (Cumulative)", idx[1], idx[2], "") for idx in df_cumulative.index],
         names=['Weekly', 'F/A', 'Task Name', 'Milestone']
     )
     
+    # Concatenate and sort
     final_df = pd.concat([df_report, df_cumulative]).sort_index()
     return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
 
@@ -195,12 +172,17 @@ except Exception as e:
 
 # --- Step 8: Pass a DataFrame back to Alteryx ---
 final_weekly_report_flat = final_weekly_report.reset_index()
+# Rename columns to a flat list for Alteryx, handling the MultiIndex
 new_columns_weekly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [f"{col[0]} - {col[1]}" for col in final_weekly_report.columns]
 final_weekly_report_flat.columns = new_columns_weekly
 
 final_monthly_report_flat = final_monthly_report.reset_index()
+# Rename columns to a flat list for Alteryx
 new_columns_monthly = ['Weekly', 'F/A', 'Task Name', 'Milestone'] + [col for col in final_monthly_report.columns]
 final_monthly_report_flat.columns = new_columns_monthly
 
+# Pass the weekly report to Alteryx output 1
 Alteryx.write(final_weekly_report_flat, 1)
+
+# Pass the monthly report to Alteryx output 2
 Alteryx.write(final_monthly_report_flat, 2)
