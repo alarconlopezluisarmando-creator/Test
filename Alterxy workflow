@@ -1,29 +1,10 @@
-I have below code, but is failing, could you help me to fix it?
-
-error:
-<>:9: SyntaxWarning: invalid escape sequence '\d'
-<>:9: SyntaxWarning: invalid escape sequence '\d'
-C:\Users\l5.lopez\AppData\Local\Temp\ipykernel_12684\818727604.py:9: SyntaxWarning: invalid escape sequence '\d'
-  """
-C:\Users\l5.lopez\AppData\Local\Temp\ipykernel_12684\818727604.py:9: SyntaxWarning: invalid escape sequence '\d'
-  """
----------------------------------------------------------------------------
-ModuleNotFoundError                       Traceback (most recent call last)
-Cell In[5], line 5
-      3 import os
-      4 from datetime import datetime
-----> 5 from ayx import Alteryx
-      6 import openpyxl
-      8 def download_file_from_sftp_to_network(output_network_path):
-
-ModuleNotFoundError: No module named 'ayx'
-
 import paramiko
 import pandas as pd
 import os
 from datetime import datetime
-from ayx import Alteryx
 import openpyxl
+
+# --- Functions without Alteryx dependencies ---
 
 def download_file_from_sftp_to_network(output_network_path):
     """
@@ -31,13 +12,14 @@ def download_file_from_sftp_to_network(output_network_path):
 
     Args:
         output_network_path (str): The full network path where the file should be saved.
-                                   Example: r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
+                                   Example: r'\\\\netapp\\depts\\Jannat\\Viaero\\01. Quickbase'
     """
+    print("Starting SFTP file download...")
     try:
         # SFTP connection parameters
         host = 'ftp.onevizion.com'
-        username = 'xxx' # Replace with your username
-        password = 'xxx' # Replace with your password
+        username = 'xxx'  # Replace with your username
+        password = 'xxx'  # Replace with your password
 
         # Remote file path and name
         remote_file_path = '/home/samsung_sea2/es/Outbound/Quote_Tracker/Customer_PO_Doc'
@@ -61,12 +43,12 @@ def download_file_from_sftp_to_network(output_network_path):
 
         # Download file
         sftp.get(full_remote_path, full_local_path)
-        Alteryx.log(f"File downloaded successfully to {full_local_path}", 0)
+        print(f"File downloaded successfully to {full_local_path}")
         
         return full_local_path
 
     except Exception as e:
-        Alteryx.log(f"An error occurred: {e}", 3)
+        print(f"An error occurred: {e}")
         return None
     finally:
         # Close SFTP and SSH connections safely
@@ -76,32 +58,34 @@ def download_file_from_sftp_to_network(output_network_path):
             ssh.close()
 
 
-def process_excel_for_alteryx(excel_path):
+def process_excel_to_dataframe(excel_path):
     """
-    Reads an Excel file and returns its content as a DataFrame to Alteryx.
+    Reads an Excel file and returns its content as a DataFrame.
     """
+    print(f"Attempting to process Excel file from: {excel_path}")
     try:
         if excel_path and os.path.exists(excel_path):
             df = pd.read_excel(excel_path)
-            Alteryx.log(f"Read Excel file from: {excel_path}", 0)
+            print("Successfully processed Excel file.")
             return df
     except Exception as e:
-        Alteryx.log(f"Error processing the Excel data: {e}", 3)
+        print(f"Error processing the Excel data: {e}")
         return pd.DataFrame()
 
 
-# --- Alteryx Python Tool Code Block ---
+# --- Standalone Python Script Execution ---
 
-# Network path where the file will be saved
 # Note the 'r' prefix for a raw string to avoid invalid escape sequence warnings
+# You can also use double backslashes: '\\\\netapp\\depts\\Jannat\\Viaero\\01. Quickbase'
 network_path = r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
 
 # Download the file to the network path
 downloaded_file_path = download_file_from_sftp_to_network(network_path)
 
-# If the download was successful, process the Excel file and send it to Alteryx
+# If the download was successful, process the Excel file
 if downloaded_file_path:
-    processed_df = process_excel_for_alteryx(downloaded_file_path)
+    processed_df = process_excel_to_dataframe(downloaded_file_path)
     
-    # Write the DataFrame to the first output anchor (Anchor number 1)
-    Alteryx.write(processed_df, 1)
+    # You can now work with the pandas DataFrame
+    print("\n--- Processed DataFrame ---")
+    print(processed_df.head())
