@@ -2,27 +2,42 @@ import paramiko
 import pandas as pd
 import os
 from datetime import datetime
+# from ayx import Alteryx # This line will be uncommented when running in Alteryx
 import openpyxl
+
+# --- Alteryx Specific Imports ---
+# Make sure to uncomment this line when running in an Alteryx Python Tool
+from ayx import Alteryx
 
 def download_file_from_sftp_to_network(output_network_path):
     """
     Downloads a single file from an SFTP server to a specified network directory.
+
+    Args:
+        output_network_path (str): The full network path where the file should be saved.
+                                   Example: r'\\\\netapp\\depts\\Jannat\\Viaero\\01. Quickbase'
     """
+    Alteryx.log("Starting SFTP file download...", 0) # Log instead of print
     try:
         # SFTP connection parameters
         host = 'ftp.onevizion.com'
         username = 'xxx'  # Replace with your username
         password = 'xxx'  # Replace with your password
 
-        # Remote file path and name
+        # Remote file path and name (Choose based on your needs, using Scenario 1 here)
         remote_file_path = '/home/samsung_sea2/es/Outbound/Quote_Tracker/Customer_PO_Doc'
-        # Corrected remote file name
-        remote_file_name = 'Quickbase_RFDS_CD_TED.xlsx'
+        remote_file_name = 'CUST_PO_DOC_.xlsx' # Or 'Quickbase_RFDS_CD_TED.xlsx' if that's the actual remote file name
         full_remote_path = os.path.join(remote_file_path, remote_file_name)
 
         # Local download directory and file name on the network drive
         current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-        local_file_name = f"Quickbase_RFDS_CD_TED_{current_datetime}.xlsx"
+        
+        # Adjust local file name based on which remote file name you chose above
+        if remote_file_name == 'CUST_PO_DOC_.xlsx':
+            local_file_name = f"CUST_PO_DOC_{current_datetime}.xlsx"
+        else: # Assuming remote_file_name is 'Quickbase_RFDS_CD_TED.xlsx'
+            local_file_name = f"Quickbase_RFDS_CD_TED_{current_datetime}.xlsx"
+
         full_local_path = os.path.join(output_network_path, local_file_name)
         
         # Ensure the network directory exists
@@ -37,12 +52,12 @@ def download_file_from_sftp_to_network(output_network_path):
 
         # Download file
         sftp.get(full_remote_path, full_local_path)
-        print(f"File downloaded successfully to {full_local_path}")
+        Alteryx.log(f"File downloaded successfully to {full_local_path}", 0) # Log instead of print
         
         return full_local_path
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        Alteryx.log(f"An error occurred during SFTP download: {e}", 3) # Log error
         return None
     finally:
         # Close SFTP and SSH connections safely
@@ -52,31 +67,44 @@ def download_file_from_sftp_to_network(output_network_path):
             ssh.close()
 
 
-def process_excel_to_dataframe(excel_path):
+def process_excel_for_alteryx(excel_path):
     """
-    Reads an Excel file and returns its content as a DataFrame.
+    Reads an Excel file and returns its content as a DataFrame for Alteryx.
     """
+    Alteryx.log(f"Attempting to process Excel file from: {excel_path}", 0) # Log
     try:
         if excel_path and os.path.exists(excel_path):
             df = pd.read_excel(excel_path)
-            print(f"Read Excel file from: {excel_path}")
+            Alteryx.log(f"Successfully read Excel file from: {excel_path}", 0) # Log
             return df
+        else:
+            Alteryx.log(f"Excel file not found or path is invalid: {excel_path}", 2) # Warning
+            return pd.DataFrame() # Return empty DataFrame on failure
     except Exception as e:
-        print(f"Error processing the Excel data: {e}")
-        return pd.DataFrame()
+        Alteryx.log(f"Error processing the Excel data: {e}", 3) # Log error
+        return pd.DataFrame() # Return empty DataFrame on failure
 
-# --- Standalone Python Script Execution ---
-if __name__ == "__main__":
-    network_path = r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
 
-    # Download the file to the network path
-    downloaded_file_path = download_file_from_sftp_to_network(network_path)
+# --- Alteryx Python Tool Code Block ---
+# This part of the code is what Alteryx will execute.
 
-    # If the download was successful, process the Excel file
-    if downloaded_file_path:
-        processed_df = process_excel_to_dataframe(downloaded_file_path)
-        
-        if not processed_df.empty:
-            print("\n--- Processed DataFrame (first 5 rows) ---")
-            print(processed_df.head())
+# Network path where the file will be saved
+# Note the 'r' prefix for a raw string to avoid invalid escape sequence warnings
+network_path = r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
+
+# Download the file to the network path
+downloaded_file_path = download_file_from_sftp_to_network(network_path)
+
+# If the download was successful, process the Excel file and send it to Alteryx
+if downloaded_file_path:
+    processed_df = process_excel_for_alteryx(downloaded_file_path)
+    
+    # Write the DataFrame to the first output anchor (Anchor number 1)
+    if not processed_df.empty:
+        Alteryx.write(processed_df, 1)
+        Alteryx.log("DataFrame successfully written to Alteryx output anchor 1.", 0)
+    else:
+        Alteryx.log("No data to write to Alteryx output anchor 1 as DataFrame is empty.", 2)
+else:
+    Alteryx.log("File download failed, no data to process or write to Alteryx.", 3)
 
