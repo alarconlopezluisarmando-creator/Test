@@ -1,1 +1,107 @@
+I have below code, but is failing, could you help me to fix it?
 
+error:
+<>:9: SyntaxWarning: invalid escape sequence '\d'
+<>:9: SyntaxWarning: invalid escape sequence '\d'
+C:\Users\l5.lopez\AppData\Local\Temp\ipykernel_12684\818727604.py:9: SyntaxWarning: invalid escape sequence '\d'
+  """
+C:\Users\l5.lopez\AppData\Local\Temp\ipykernel_12684\818727604.py:9: SyntaxWarning: invalid escape sequence '\d'
+  """
+---------------------------------------------------------------------------
+ModuleNotFoundError                       Traceback (most recent call last)
+Cell In[5], line 5
+      3 import os
+      4 from datetime import datetime
+----> 5 from ayx import Alteryx
+      6 import openpyxl
+      8 def download_file_from_sftp_to_network(output_network_path):
+
+ModuleNotFoundError: No module named 'ayx'
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+from ayx import Alteryx
+import openpyxl
+
+def download_file_from_sftp_to_network(output_network_path):
+    """
+    Downloads a single file from an SFTP server to a specified network directory.
+
+    Args:
+        output_network_path (str): The full network path where the file should be saved.
+                                   Example: r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
+    """
+    try:
+        # SFTP connection parameters
+        host = 'ftp.onevizion.com'
+        username = 'xxx' # Replace with your username
+        password = 'xxx' # Replace with your password
+
+        # Remote file path and name
+        remote_file_path = '/home/samsung_sea2/es/Outbound/Quote_Tracker/Customer_PO_Doc'
+        remote_file_name = 'CUST_PO_DOC_.xlsx'
+        full_remote_path = os.path.join(remote_file_path, remote_file_name)
+
+        # Local download directory and file name on the network drive
+        current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+        local_file_name = f"CUST_PO_DOC_{current_datetime}.xlsx"
+        full_local_path = os.path.join(output_network_path, local_file_name)
+        
+        # Ensure the network directory exists
+        os.makedirs(output_network_path, exist_ok=True)
+
+        # Establish SFTP connection
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, username=username, password=password)
+
+        sftp = ssh.open_sftp()
+
+        # Download file
+        sftp.get(full_remote_path, full_local_path)
+        Alteryx.log(f"File downloaded successfully to {full_local_path}", 0)
+        
+        return full_local_path
+
+    except Exception as e:
+        Alteryx.log(f"An error occurred: {e}", 3)
+        return None
+    finally:
+        # Close SFTP and SSH connections safely
+        if 'sftp' in locals():
+            sftp.close()
+        if 'ssh' in locals():
+            ssh.close()
+
+
+def process_excel_for_alteryx(excel_path):
+    """
+    Reads an Excel file and returns its content as a DataFrame to Alteryx.
+    """
+    try:
+        if excel_path and os.path.exists(excel_path):
+            df = pd.read_excel(excel_path)
+            Alteryx.log(f"Read Excel file from: {excel_path}", 0)
+            return df
+    except Exception as e:
+        Alteryx.log(f"Error processing the Excel data: {e}", 3)
+        return pd.DataFrame()
+
+
+# --- Alteryx Python Tool Code Block ---
+
+# Network path where the file will be saved
+# Note the 'r' prefix for a raw string to avoid invalid escape sequence warnings
+network_path = r'\\netapp\depts\Jannat\Viaero\01. Quickbase'
+
+# Download the file to the network path
+downloaded_file_path = download_file_from_sftp_to_network(network_path)
+
+# If the download was successful, process the Excel file and send it to Alteryx
+if downloaded_file_path:
+    processed_df = process_excel_for_alteryx(downloaded_file_path)
+    
+    # Write the DataFrame to the first output anchor (Anchor number 1)
+    Alteryx.write(processed_df, 1)
