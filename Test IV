@@ -5,27 +5,46 @@ for each day I need a count with out duplicates for each of project ID, is one o
 
 Dates need to be the columns and the status the rows. 
 
-;WITH Dates AS (
+DECLARE @sql NVARCHAR(MAX);
+DECLARE @dates_pivot NVARCHAR(MAX) = N'';
+
+-- Generate dynamic column names (e.g., [2025-09-11], [2025-09-12])
+SELECT @dates_pivot += 'SUM(CASE WHEN ApprovalDate = ''' + CONVERT(nvarchar(10), d.DateValue, 120) + ''' THEN [Value] ELSE 0 END) AS [' + CONVERT(nvarchar(10), d.DateValue, 120) + '],'
+FROM (
   SELECT DATEADD(DAY, -7, GETDATE()) AS DateValue
   UNION ALL
   SELECT DATEADD(DAY, 1, DateValue)
   FROM Dates
   WHERE DateValue < GETDATE()
-)
-SELECT 
-  d.DateValue AS ApprovalDate,
-  COALESCE(a.ApprovedCount, 0) AS ApprovedCount,
-  COALESCE(a.RejectedCount, 0) AS RejectedCount,
-  COALESCE(a.PendingReviewCount, 0) AS PendingReviewCount
-FROM 
-  Dates d
+) AS d;
+
+-- Remove the last comma
+SET @dates_pivot = LEFT(@dates_pivot, LEN(@dates_pivot) - 1);
+
+-- Construct the final dynamic SQL statement
+SET @sql = N'
+WITH Dates AS (
+  SELECT DATEADD(DAY, -7, GETDATE()) AS DateValue
+  UNION ALL
+  SELECT DATEADD(DAY, 1, DateValue)
+  FROM Dates
+  WHERE DateValue < GETDATE()
+),
+DailyCounts AS (
+  SELECT 
+    d.DateValue AS ApprovalDate,
+    COALESCE(a.ApprovedCount, 0) AS ApprovedCount,
+    COALESCE(a.RejectedCount, 0) AS RejectedCount,
+    COALESCE(a.PendingReviewCount, 0) AS PendingReviewCount
+  FROM 
+    Dates d
   LEFT JOIN 
     (
       SELECT 
         TRY_CONVERT(date, LEFT([RFDS Approval History], 10)) AS ApprovalDate,
-        SUM(CASE WHEN [RFDS Review Status Text] = 'Approved' THEN 1 ELSE 0 END) AS ApprovedCount,
-        SUM(CASE WHEN [RFDS Review Status Text] = 'Rejected' THEN 1 ELSE 0 END) AS RejectedCount,
-        SUM(CASE WHEN [RFDS Review Status Text] = 'Pending Review' THEN 1 ELSE 0 END) AS PendingReviewCount
+        SUM(CASE WHEN [RFDS Review Status Text] = ''Approved'' THEN 1 ELSE 0 END) AS ApprovedCount,
+        SUM(CASE WHEN [RFDS Review Status Text] = ''Rejected'' THEN 1 ELSE 0 END) AS RejectedCount,
+        SUM(CASE WHEN [RFDS Review Status Text] = ''Pending Review'' THEN 1 ELSE 0 END) AS PendingReviewCount
       FROM 
         [ViaeroDWH].[dbo].[QB_RFDS_3days]
       WHERE 
@@ -33,6 +52,22 @@ FROM
       GROUP BY 
         TRY_CONVERT(date, LEFT([RFDS Approval History], 10))
     ) a 
-  ON 
-    d.DateValue = a.ApprovalDate
-OPTION (MAXRECURSION 0)
+  ON d.DateValue = a.ApprovalDate
+),
+UnpivotedData AS (
+    SELECT ''Approved'' AS Status, ApprovalDate, ApprovedCount AS [Value] FROM DailyCounts
+    UNION ALL
+    SELECT ''Rejected'' AS Status, ApprovalDate, RejectedCount AS [Value] FROM DailyCounts
+    UNION ALL
+    SELECT ''Pending Review'' AS Status, ApprovalDate, PendingReviewCount AS [Value] FROM DailyCounts
+)
+SELECT 
+  Status, ' + @dates_pivot + '
+FROM 
+  UnpivotedData
+GROUP BY 
+  Status
+OPTION (MAXRECURSION 0);';
+
+-- Execute the dynamic SQL
+EXEC sp_executesql @sql;
