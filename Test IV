@@ -1,1 +1,22 @@
-Hi
+hI, 
+
+I need for the column [RFDS Approval History], the date that are comming inside, and the status, these cand be Approved, Rejected, Pending Review,
+for each day I need a count with out duplicates for each of project ID, is one of the is empty, I need you put 0.
+
+Dates need to be the columns and the status the rows. 
+
+SELECT TOP (1000) [Site - Project Name]
+      ,[Network Site Name (complete)]
+      ,[Site #]
+      ,[CBRS (3.65) Site]
+      ,[Conditional Tower Top]
+      ,[RFDS]
+      ,[Vendor Notes]
+      ,[RFDS Approval History]
+      ,[RFDS Redline Notes]
+      ,[RFDS Rejection Notes]
+      ,[RFDS Review Status Text]
+      ,[Approval Date]
+      ,[Date_Refreshed]
+      ,[Date Added]
+  FROM [ViaeroDWH].[dbo].[QB_RFDS_3days]
