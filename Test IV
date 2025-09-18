@@ -5,42 +5,49 @@ for each day I need a count with out duplicates for each of project ID, is one o
 
 Dates need to be the columns and the status the rows. 
 
-SELECT
-    Status,
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 0) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_0',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 1) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_1',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 2) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_2',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 3) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_3',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 4) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_4',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 5) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_5',
-    COALESCE(SUM(CASE WHEN [Approval_Date] = CONVERT(DATE, GETDATE() - 6) THEN [Unique_Projects] ELSE 0 END), 0) AS 'Day_6'
-FROM
-    (SELECT
-        TRY_CAST(SUBSTRING([RFDS Approval History], PATINDEX('%[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]%', [RFDS Approval History]), 10) AS DATE) AS [Approval_Date],
-        CASE
-            WHEN [RFDS Approval History] LIKE '%Approved%' THEN 'Approved'
-            WHEN [RFDS Approval History] LIKE '%Rejected%' THEN 'Rejected'
-            WHEN [RFDS Approval History] LIKE '%Pending Review%' THEN 'Pending Review'
-            ELSE 'Other' -- Catches data without a specified status
-        END AS Status,
-        COUNT(DISTINCT [Site - Project Name]) AS [Unique_Projects]
-    FROM
-        [ViaeroDWH].[dbo].[QB_RFDS_3days]
-    WHERE
-        [RFDS Approval History] IS NOT NULL
-        AND [RFDS Approval History] <> ''
-    GROUP BY
-        TRY_CAST(SUBSTRING([RFDS Approval History], PATINDEX('%[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]%', [RFDS Approval History]), 10) AS DATE),
+WITH ParsedData AS (
+    SELECT
+        [Site - Project Name],
+        TRY_CAST(SUBSTRING([RFDS Approval History], PATINDEX('%[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]%', [RFDS Approval History]), 10) AS DATE) AS Approval_Date,
         CASE
             WHEN [RFDS Approval History] LIKE '%Approved%' THEN 'Approved'
             WHEN [RFDS Approval History] LIKE '%Rejected%' THEN 'Rejected'
             WHEN [RFDS Approval History] LIKE '%Pending Review%' THEN 'Pending Review'
             ELSE 'Other'
-        END
-    ) AS Subquery
+        END AS Status
+    FROM
+        [ViaeroDWH].[dbo].[QB_RFDS_3days]
+    WHERE
+        [RFDS Approval History] IS NOT NULL
+        AND [RFDS Approval History] <> ''
+),
+AggregatedData AS (
+    SELECT
+        Approval_Date,
+        Status,
+        COUNT(DISTINCT [Site - Project Name]) AS Unique_Projects
+    FROM
+        ParsedData
+    WHERE
+        Approval_Date IS NOT NULL
+        AND Status <> 'Other'
+    GROUP BY
+        Approval_Date,
+        Status
+)
+SELECT
+    Status,
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 0) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_0',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 1) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_1',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 2) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_2',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 3) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_3',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 4) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_4',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 5) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_5',
+    COALESCE(SUM(CASE WHEN Approval_Date = CONVERT(DATE, GETDATE() - 6) THEN Unique_Projects ELSE 0 END), 0) AS 'Day_6'
+FROM
+    AggregatedData
 WHERE
-    [Approval_Date] IS NOT NULL -- Excludes rows where a date couldn't be found
-    AND Status <> 'Other' -- Optional: excludes rows that didn't match a desired status
+    Approval_Date >= CONVERT(DATE, GETDATE() - 6)
 GROUP BY
     Status
 ORDER BY
