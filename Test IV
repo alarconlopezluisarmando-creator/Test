@@ -20,3 +20,45 @@ SELECT TOP (1000) [Site - Project Name]
       ,[Date_Refreshed]
       ,[Date Added]
   FROM [ViaeroDWH].[dbo].[QB_RFDS_3days]
+
+
+DECLARE @cols AS NVARCHAR(MAX),
+        @query AS NVARCHAR(MAX);
+
+-- Generate the comma-separated list of the last 7 dates for the PIVOT columns
+-- and for the ISNULL check in the final SELECT statement.
+SELECT @cols = STRING_AGG(QUOTENAME(CAST(DATEADD(day, -number, GETDATE()) AS DATE)), ',')
+FROM (
+    SELECT TOP 7 number
+    FROM master.dbo.spt_values
+    WHERE type = 'P'
+    ORDER BY number
+) AS T;
+
+-- Construct the full dynamic SQL query
+SET @query = '
+WITH CTE_DailyCounts AS (
+    SELECT
+        CAST(JSON_VALUE([RFDS Approval History], ''$.date'') AS DATE) AS [Approval Date],
+        JSON_VALUE([RFDS Approval History], ''$.status'') AS [Status],
+        COUNT(DISTINCT [Site - Project Name]) AS DailyProjects
+    FROM
+        [ViaeroDWH].[dbo].[QB_RFDS_3days]
+    WHERE
+        CAST(JSON_VALUE([RFDS Approval History], ''$.date'') AS DATE) >= CONVERT(DATE, GETDATE() - 6)
+        AND JSON_VALUE([RFDS Approval History], ''$.status'') IN (''Approved'', ''Rejected'', ''Pending Review'')
+    GROUP BY
+        CAST(JSON_VALUE([RFDS Approval History], ''$.date'') AS DATE),
+        JSON_VALUE([RFDS Approval History], ''$.status'')
+)
+SELECT
+    Status, ' + REPLACE(@cols, '[', 'ISNULL([') + ', 0) AS ' + REPLACE(@cols, ', ', ', 0) AS ') + '
+FROM
+    CTE_DailyCounts
+PIVOT (
+    SUM(DailyProjects)
+    FOR [Approval Date] IN (' + @cols + ')
+) AS PivotTable;';
+
+-- Execute the dynamic SQL query
+EXECUTE sp_executesql @query;
