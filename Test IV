@@ -77,3 +77,57 @@ BEGIN
     -- Execute the dynamic SQL
     EXEC sp_executesql @sql;
 END;
+
+
+Python code 
+
+import pyodbc
+
+# Database connection details
+# Replace these with your actual server, database, username, and password
+server = 'your_server_name'
+database = 'ViaeroDWH'
+username = 'your_username'
+password = 'your_password'
+
+# Create the connection string
+cnxn_str = (
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};'
+    f'SERVER={server};'
+    f'DATABASE={database};'
+    f'UID={username};'
+    f'PWD={password};'
+)
+
+try:
+    # Establish the connection
+    cnxn = pyodbc.connect(cnxn_str)
+    cursor = cnxn.cursor()
+
+    # Execute the stored procedure
+    cursor.execute("{CALL dbo.GetRFDSApprovalSummary}")
+
+    # Fetch the column names from the cursor description
+    columns = [column[0] for column in cursor.description]
+
+    # Fetch all the rows from the result set
+    rows = cursor.fetchall()
+
+    # Print the column headers
+    print('\t'.join(columns))
+
+    # Print each row
+    for row in rows:
+        print('\t'.join(str(item) for item in row))
+
+except pyodbc.Error as ex:
+    sqlstate = ex.args[0]
+    print(f"Database error occurred: {ex}")
+
+finally:
+    # Close the cursor and connection
+    if 'cursor' in locals():
+        cursor.close()
+    if 'cnxn' in locals():
+        cnxn.close()
+
