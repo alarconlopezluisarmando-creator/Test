@@ -232,5 +232,19 @@ ORDER BY
 -- Execute the dynamic query
 EXEC sp_executesql @query;
 
+Simple query 
+SELECT
+    [RFDS Review Status Text] AS [Status Changes Code],
+    CAST([Approval Date] AS DATE) AS [Date],
+    DATENAME(month, DATEADD(month, -1, GETDATE())) AS [Last Month],
+    DATEPART(isowk, CAST([Approval Date] AS DATE)) AS [Week Number]
+FROM
+    [ViaeroDWH].[dbo].[QB_RFDS_3days]
+WHERE
+    [RFDS Review Status Text] IN ('Approved', 'Rejected', 'Uploaded')
+ORDER BY
+    [Date] DESC;
+
+
 
 
