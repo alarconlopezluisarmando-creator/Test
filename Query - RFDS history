@@ -28,3 +28,21 @@ SELECT [Site - Project Name]
       ,[Checkpoint]
       ,[Date_Refreshed]
   FROM [ViaeroDWH].[dbo].[QB_RFDS_3days]
+
+Query I
+
+SELECT
+    'Status Change Count' AS Date,
+    COUNT(CASE WHEN [Approval Date] < DATEADD(wk, DATEDIFF(wk, 0, GETDATE()), 0) THEN 1 END) AS [Last Week Total],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(GETDATE() AS DATE) THEN 1 END) AS [Today],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) THEN 1 END) AS [Yesterday],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -2, GETDATE()) AS DATE) THEN 1 END) AS [Two Days Ago],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -3, GETDATE()) AS DATE) THEN 1 END) AS [Three Days Ago],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -4, GETDATE()) AS DATE) THEN 1 END) AS [Four Days Ago],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -5, GETDATE()) AS DATE) THEN 1 END) AS [Five Days Ago],
+    COUNT(CASE WHEN CAST([Approval Date] AS DATE) = CAST(DATEADD(day, -6, GETDATE()) AS DATE) THEN 1 END) AS [Six Days Ago]
+FROM
+    [ViaeroDWH].[dbo].[QB_RFDS_3days]
+WHERE
+    [RFDS Review Status Text] IN ('Approved', 'Rejected') -- Filter for relevant status changes
+
