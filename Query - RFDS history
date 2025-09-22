@@ -76,5 +76,33 @@ ORDER BY
 -- Execute the dynamic query
 EXEC sp_executesql @query;
 `
+Query III
+
+-- Define a CTE to get the status changes and their approval dates
+WITH StatusChanges AS (
+    SELECT
+        [RFDS Review Status Text],
+        CAST([Approval Date] AS DATE) AS ApprovalDate
+    FROM
+        [ViaeroDWH].[dbo].[QB_RFDS_3days]
+    WHERE
+        [RFDS Review Status Text] IN ('Approved', 'Rejected', 'Uploaded') -- Adjust statuses as needed
+)
+-- Aggregate the data using conditional counts for each specific date
+SELECT
+    [RFDS Review Status Text] AS [Status Changes Code],
+    SUM(CASE WHEN ApprovalDate = '2025-09-22' THEN 1 ELSE 0 END) AS [9/22/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-21' THEN 1 ELSE 0 END) AS [9/21/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-20' THEN 1 ELSE 0 END) AS [9/20/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-19' THEN 1 ELSE 0 END) AS [9/19/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-18' THEN 1 ELSE 0 END) AS [9/18/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-17' THEN 1 ELSE 0 END) AS [9/17/2025],
+    SUM(CASE WHEN ApprovalDate = '2025-09-16' THEN 1 ELSE 0 END) AS [9/16/2025]
+FROM
+    StatusChanges
+GROUP BY
+    [RFDS Review Status Text]
+ORDER BY
+    [Status Changes Code];
 
 
