@@ -190,6 +190,8 @@ GROUP BY
 ORDER BY
     [Status Changes Code];
 
+Query VI
+
 
 
 
