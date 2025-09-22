@@ -116,7 +116,7 @@ WITH StatusChanges AS (
     FROM
         [ViaeroDWH].[dbo].[QB_RFDS_3days]
     WHERE
-        [RFDS Review Status Text] IN ('Approved', 'Rejected', 'Uploaded') -- Adjust statuses as needed
+        [RFDS Review Status Text] IN ('Approved', 'Rejected', 'Uploaded')
 )
 -- Aggregate the data using conditional counts for each specific date
 SELECT
@@ -127,7 +127,7 @@ SELECT
         ELSE 0 
     END) AS [Last Month Total],
     SUM(CASE 
-        WHEN MONTH(ApprovalDate) = MONTH(GETDATE()) AND WEEK(ApprovalDate) < WEEK(GETDATE()) THEN 1 
+        WHEN MONTH(ApprovalDate) = MONTH(GETDATE()) AND DATEPART(week, ApprovalDate) < DATEPART(week, GETDATE()) THEN 1 
         ELSE 0 
     END) AS [Current Month Weeks Total],
     SUM(CASE WHEN ApprovalDate = '2025-09-22' THEN 1 ELSE 0 END) AS [9/22/2025],
@@ -143,5 +143,6 @@ GROUP BY
     [RFDS Review Status Text]
 ORDER BY
     [Status Changes Code];
+
 
 
