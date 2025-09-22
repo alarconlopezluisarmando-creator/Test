@@ -46,3 +46,35 @@ FROM
 WHERE
     [RFDS Review Status Text] IN ('Approved', 'Rejected') -- Filter for relevant status changes
 
+Query II
+
+DECLARE @cols NVARCHAR(MAX);
+DECLARE @query NVARCHAR(MAX);
+DECLARE @today DATE = GETDATE();
+
+-- Build the list of date columns dynamically
+SELECT @cols = STUFF((SELECT ', SUM(CASE WHEN CAST([Approval Date] AS DATE) = ''' + FORMAT(DATEADD(day, number, @today), 'yyyy-MM-dd') + ''' THEN 1 ELSE 0 END) AS [' + FORMAT(DATEADD(day, number, @today), 'M/d/yyyy') + ']'
+                      FROM master.dbo.spt_values
+                      WHERE type = 'P' AND number BETWEEN -6 AND 0
+                      ORDER BY number
+                      FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '');
+
+-- Construct the full dynamic query
+SET @query = N'
+SELECT
+    [RFDS Review Status Text] AS [Status Changes Code],
+    ' + @cols + '
+FROM
+    [ViaeroDWH].[dbo].[QB_RFDS_3days]
+WHERE
+    [RFDS Review Status Text] IN (''Approved'', ''Rejected'', ''Uploaded'')
+GROUP BY
+    [RFDS Review Status Text]
+ORDER BY
+    [Status Changes Code];';
+
+-- Execute the dynamic query
+EXEC sp_executesql @query;
+`
+
+
