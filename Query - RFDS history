@@ -192,6 +192,45 @@ ORDER BY
 
 Query VI
 
+DECLARE @lastMonthHeader NVARCHAR(MAX);
+DECLARE @weeksHeader NVARCHAR(MAX);
+DECLARE @dailyHeaders NVARCHAR(MAX);
+DECLARE @query NVARCHAR(MAX);
+
+-- Get the last month's name (e.g., 'August')
+SET @lastMonthHeader = QUOTENAME(DATENAME(month, DATEADD(month, -1, GETDATE())));
+
+-- Build the week headers dynamically (e.g., 'W34', 'W35')
+SET @weeksHeader = STUFF((
+    SELECT ', SUM(CASE WHEN DATEPART(isowk, CAST([Approval Date] AS DATE)) = ' + CAST(DATEPART(isowk, DATEADD(week, number, GETDATE())) AS VARCHAR) + ' THEN 1 ELSE 0 END) AS ' + QUOTENAME('W' + CAST(DATEPART(isowk, DATEADD(week, number, GETDATE())) AS VARCHAR))
+    FROM master.dbo.spt_values
+    WHERE type = 'P' AND number BETWEEN -3 AND -1 -- Last 3 completed weeks
+    FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '');
+
+-- Build the daily headers dynamically (e.g., '[9/22/2025]', '[9/21/2025]')
+SET @dailyHeaders = STUFF((
+    SELECT ', SUM(CASE WHEN CAST([Approval Date] AS DATE) = ''' + FORMAT(DATEADD(day, number, GETDATE()), 'yyyy-MM-dd') + ''' THEN 1 ELSE 0 END) AS ' + QUOTENAME(FORMAT(DATEADD(day, number, GETDATE()), 'M/d/yyyy'))
+    FROM master.dbo.spt_values
+    WHERE type = 'P' AND number BETWEEN -6 AND 0 -- Last 7 days, including today
+    ORDER BY number DESC
+    FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '');
+
+-- Construct the full dynamic query string
+SET @query = N'
+SELECT
+    [RFDS Review Status Text] AS [Status Changes Code],
+    SUM(CASE WHEN MONTH(CAST([Approval Date] AS DATE)) = MONTH(DATEADD(month, -1, GETDATE())) AND YEAR(CAST([Approval Date] AS DATE)) = YEAR(DATEADD(month, -1, GETDATE())) THEN 1 ELSE 0 END) AS ' + @lastMonthHeader + ',
+    ' + @weeksHeader + ',
+    ' + @dailyHeaders + '
+FROM
+    [ViaeroDWH].[dbo].[QB_RFDS_3days]
+GROUP BY
+    [RFDS Review Status Text]
+ORDER BY
+    [Status Changes Code];';
+
+-- Execute the dynamic query
+EXEC sp_executesql @query;
 
 
 
