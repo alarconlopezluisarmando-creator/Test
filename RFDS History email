@@ -1,0 +1,123 @@
+Hi, 
+
+I need to read from a db three different tables using SQL form Alteryx using the python module. 
+
+Could you help me to create the code:
+
+1. below are the connection: 
+# Database connection details
+server = '105.52.12.43'
+port = 1433
+USERNAME = 'RF_Read_Only'
+PSSWD = 'Samsung2024!'
+DB = 'ViaeroDWH'
+
+connection_string = f"mssql+pyodbc://{USERNAME}:{PSSWD}@{server}:{port}/{DB}?driver=ODBC+Driver+17+for+SQL+Server&Encrypt=yes&TrustServerCertificate=yes"
+
+engine = create_engine(connection_string, fast_executemany=True)
+
+a. first table need to be this query:
+WITH StatusCounts AS (
+  SELECT 
+    [P:Viaero Phase],
+    SUM(CASE WHEN [P:[QB]] RFDS Review Status Text] = 'Approved' THEN 1 ELSE 0 END) AS [Fully Approved],
+    SUM(CASE WHEN [P:[QB]] RFDS Review Status Text] = 'Rejected' THEN 1 ELSE 0 END) AS Rejected,
+    SUM(CASE WHEN [P:[QB]] RFDS Review Status Text] = 'Pending Review' THEN 1 ELSE 0 END) AS [Pending Review],
+    COUNT([P:Project ID]) AS Total_Sites
+  FROM 
+    [ViaeroDWH].[dbo].[OV_Quickbase]
+  WHERE 
+    [P:Viaero Phase] <> 'Pending'
+    AND [P:Viaero In SEA Scope] = 'YES'
+    AND [C:Site Name (SPMS)] <> 'CO-KARVAL'
+  GROUP BY 
+    [P:Viaero Phase]
+), PhaseRenamed AS (
+  SELECT 
+    CASE 
+      WHEN [P:Viaero Phase] = 'Phase 3 E//' THEN 'Phase 5'
+      ELSE [P:Viaero Phase]
+    END AS [P:Viaero Phase],
+    [Fully Approved],
+    Rejected,
+    [Pending Review],
+    Total_Sites
+  FROM 
+    StatusCounts
+), FinalResults AS (
+  SELECT 
+    [P:Viaero Phase],
+    Total_Sites,
+    COALESCE([Fully Approved], 0) AS [Fully Approved],
+    COALESCE(Rejected, 0) AS Rejected,
+    COALESCE([Pending Review], 0) AS [Pending Review],
+    Total_Sites - (COALESCE([Fully Approved], 0) + COALESCE(Rejected, 0) + COALESCE([Pending Review], 0)) AS [Pending Submission],
+    COALESCE([Fully Approved], 0) + COALESCE(Rejected, 0) + COALESCE([Pending Review], 0) AS [Total Submissions]
+  FROM 
+    PhaseRenamed
+), FinalResultsWithApproval AS (
+  SELECT 
+    [P:Viaero Phase],
+    Total_Sites,
+    [Fully Approved],
+    Rejected,
+    [Pending Review],
+    [Pending Submission],
+    [Total Submissions],
+    CASE 
+      WHEN [Total Submissions] = 0 THEN 0 
+      ELSE ROUND(([Fully Approved] * 1.0 / [Total Submissions]) * 100, 2) 
+    END AS [Approval %]
+  FROM 
+    FinalResults
+)
+SELECT 
+  [P:Viaero Phase],
+  Total_Sites,
+  [Fully Approved],
+  Rejected,
+  [Pending Review],
+  [Pending Submission],
+  [Total Submissions],
+  [Approval %]
+FROM 
+  FinalResultsWithApproval
+UNION ALL
+SELECT 
+  'Total',
+  SUM(Total_Sites),
+  SUM([Fully Approved]),
+  SUM(Rejected),
+  SUM([Pending Review]),
+  SUM([Pending Submission]),
+  SUM([Total Submissions]),
+  CASE 
+    WHEN SUM([Total Submissions]) = 0 THEN 0 
+    ELSE ROUND((SUM([Fully Approved] * 1.0) / SUM([Total Submissions])) * 100, 2) 
+  END
+FROM 
+  FinalResultsWithApproval;
+  
+b. Second table, need to be this 
+WITH PendingDaysCTE AS (
+  SELECT 
+    DATEDIFF(DAY, [P:[QB]] Date Added], CAST(GETDATE() AS DATE)) AS DaysPending
+  FROM 
+    [ViaeroDWH].[dbo].[OV_Quickbase]
+  WHERE 
+    [P:[QB]] RFDS Review Status Text] = 'Pending Review'
+    AND [P:Viaero In SEA Scope] = 'YES'
+    AND [C:Site Name (SPMS)] <> 'CO-KARVAL'
+)
+SELECT 
+  COALESCE(CAST(DaysPending AS VARCHAR(10)), 'Grand Total') AS DaysPending,
+  COUNT(*) AS Count
+FROM 
+  PendingDaysCTE
+GROUP BY 
+  DaysPending
+WITH ROLLUP
+
+c. And the third table need to be this:
+SELECT *
+FROM [RFDS_History ]
