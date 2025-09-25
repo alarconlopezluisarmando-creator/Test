@@ -1,3 +1,5 @@
+'Site #' not found in df_tracker. Columns are: ['P:Project ID', 'QT:Root Cell ID', 'QT:SPMS Site ID', 'QT:Site Name', 'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Doc Review Status Text', 'QT:QB - Submittal Date', 'QT:QB - Date Approved', 'QT:QB - Rejection Notes', 'QT:QB - Review History']
+
 Quotes_Summary_	Quote_Tracker_Data_
 	QT:Quote ID
 Site #	QT:Root Cell ID
