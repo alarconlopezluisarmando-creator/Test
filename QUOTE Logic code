@@ -223,3 +223,94 @@ try:
         print("One or both files failed to download. Comparison aborted.")
 except Exception as e:
     print(f"An error occurred during file processing: {e}")
+
+==Update
+
+def process_and_compare_files(quote_summary_path, quote_tracker_path):
+    """
+    Processes and compares the two files based on the specified requirements.
+    """
+    try:
+        # Read the files
+        df_quotes = pd.read_csv(quote_summary_path)
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError:
+        print("Error: One of the files was not found.")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    
+    # Rename columns in df_tracker to match df_quotes for the merge
+    # This is the key fix
+    df_tracker.rename(columns={
+        'QT:Root Cell ID': 'Site #',
+        'QT:QB - Document Type': 'Document Type - RAN',
+        'QT:QB - Doc Review Status Text': 'Doc Review Status Text',
+        'QT:QB - Date Approved': 'Date Approved',
+        'QT:QB - Rejection Notes': 'Rejection Notes',
+        'QT:QB - Review History': 'Review History'
+    }, inplace=True)
+
+    # Requirement 1: Format "Site #" in Quotes_Summary_
+    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
+
+    # Merge the two dataframes on the common "Site #" key
+    merged_df = pd.merge(
+        df_quotes,
+        df_tracker,
+        on='Site #',
+        how='outer',
+        suffixes=('_quotes', '_tracker')
+    )
+
+    # Requirement 3: Concatenate columns from Quotes_Summary_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #', 'Document Type - RAN_quotes', 'Review History_quotes',
+        'Doc Review Status Text_quotes', 'Rejection Notes_quotes', 'Date Approved_quotes'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'Site #', 'Document Type - RAN_tracker', 'Review History_tracker',
+        'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
+
+    # Requirement 6: Reorder and rename columns for the new file
+    if not df_diff.empty:
+        df_output = df_diff[[
+            'QT:Quote ID',
+            'Document Type - RAN_quotes',
+            'Submittal Date',
+            'Doc Review Status Text_quotes',
+            'Rejection Notes_quotes',
+            'Date Approved_quotes',
+            'Redline Notes',
+            'Review History_quotes'
+        ]].rename(columns={
+            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            'Document Type - RAN_quotes': 'QT_QB__DOCUMENT_TYPE',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'Doc Review Status Text_quotes': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'Rejection Notes_quotes': 'QT_QB__REJECTION_NOTES',
+            'Date Approved_quotes': 'QT_QB__DATE_APPROVED',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES',
+            'Review History_quotes': 'QT_QB__REVIEW_HISTORY'
+        })
+
+        # Save the differences to a new Excel file with a timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Differences saved to: {output_path}")
+    else:
+        print("No differences found between the two files.")
+
