@@ -81,15 +81,14 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     df_quotes.columns = df_quotes.columns.str.strip()
     df_tracker.columns = df_tracker.columns.str.strip()
 
-    # The lookup is the key step. Rename the column in df_tracker
-    # to match the one in df_quotes for the merge.
+    # CRITICAL: Clean and standardize the join columns in both dataframes
+    # This is the most likely reason for the empty Quote IDs.
+    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    
     df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-
-    # Requirement 1: Format "Site #" in Quotes_Summary_
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
+    df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
 
     # Merge the two dataframes on the common "Site #" key using a left join.
-    # This acts as the "VLOOKUP" to bring in the Quote ID and other tracker data.
     merged_df = pd.merge(
         df_quotes,
         df_tracker,
@@ -106,8 +105,8 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
 
     # Requirement 4: Concatenate columns from Quote_Tracker_Data_
     merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'Document Type - RAN_tracker', 'Review History_tracker',
-        'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'
+        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
     ]].astype(str).agg('|'.join, axis=1)
 
     # Requirement 5: Compare and find differences
@@ -144,206 +143,13 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     else:
         print("No differences found between the two files.")
 
-# Main script execution
-if __name__ == "__main__':
+# Main script execution (same as before)
+if __name__ == '__main__':
     # Define file paths (these should be replaced with your actual paths)
     quote_summary_file = 'path/to/your/Quotes_Summary_.csv'
     quote_tracker_file = 'path/to/your/Quote_Tracker_Data_.xlsx'
     
-    # Example usage for the SFTP download function (uncomment and fill in details)
-    # This part is for downloading the files if they are not local.
-    #
-    # HOST = 'your_sftp_host'
-    # PORT = 22
-    # USER = 'your_sftp_username'
-    # PASSWORD = 'your_sftp_password'
-    # REMOTE_PATH = '/path/on/sftp/server'
-    # FILE_PREFIX = 'file_name_prefix'
-    # LOCAL_SAVE_PATH = 'C:/local/network/path'
-    #
-    # downloaded_file_path = download_file_from_sftp_to_network(
-    #     LOCAL_SAVE_PATH, HOST, PORT, USER, PASSWORD, REMOTE_PATH, FILE_PREFIX
-    # )
-
-    # Example of how to use the processing function
-    # Replace the file paths with the actual locations of your files.
-    # If you use the SFTP download, use the path returned by the function.
+    # ... (rest of the main script, including SFTP download, if needed)
     
     process_and_compare_files(quote_summary_file, quote_tracker_file)
-
-==error 
-
-An error occurred during file processing: "['Document Type - RAN_tracker', 'Review History_tracker', 'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'] not in index"
-
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
-    """
-    Processes and compares the two files based on the specified requirements.
-    """
-    try:
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-    except FileNotFoundError:
-        print("Error: One of the files was not found.")
-        return
-    except Exception as e:
-        print(f"Error reading files: {e}")
-        return
-
-    # Clean column names
-    df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
-
-    # The lookup is the key step. Rename the column in df_tracker
-    # to match the one in df_quotes for the merge.
-    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-
-    # Requirement 1: Format "Site #" in Quotes_Summary_
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
-
-    # Merge the two dataframes on the common "Site #" key using a left join.
-    # This acts as the "VLOOKUP" to bring in the Quote ID and other tracker data.
-    merged_df = pd.merge(
-        df_quotes,
-        df_tracker,
-        on='Site #',
-        how='left',
-        suffixes=('_quotes', '_tracker')
-    )
-
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    # Use the original column names from df_quotes (no suffix needed)
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN', 'Review History',
-        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    # Use the original column names from df_tracker (no suffix needed)
-    merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
-        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
-            'QT:Quote ID',
-            'Submittal Date',
-            'Document Type - RAN',
-            'Review History',
-            'Doc Review Status Text',
-            'Date Approved',
-            'Rejection Notes',
-            'Redline Notes'
-        ]].rename(columns={
-            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
-            'Submittal Date': 'QT_SUBMITTAL_DATE',
-            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
-            'Review History': 'QT_QB__REVIEW_HISTORY',
-            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-            'Date Approved': 'QT_QB__DATE_APPROVED',
-            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
-            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
-        })
-        
-        # Save the differences to a new Excel file with a timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
-    else:
-        print("No differences found between the two files.")
-
-==Update 4
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
-    """
-    Processes and compares the two files based on the specified requirements.
-    """
-    try:
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-    except FileNotFoundError:
-        print("Error: One of the files was not found.")
-        return
-    except Exception as e:
-        print(f"Error reading files: {e}")
-        return
-
-    # Clean column names
-    df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
-    
-    # ---------------------------------------------------------------------
-    # CRUCIAL FIX: Standardize the join columns before the merge
-    # ---------------------------------------------------------------------
-    
-    # Standardize 'Site #' in df_quotes
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.zfill(4)
-
-    # Rename and standardize the join column in df_tracker
-    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-    df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.zfill(4)
-    
-    # ---------------------------------------------------------------------
-    # End of CRUCIAL FIX
-    # ---------------------------------------------------------------------
-
-    # Merge the two dataframes on the common "Site #" key using a left join.
-    merged_df = pd.merge(
-        df_quotes,
-        df_tracker,
-        on='Site #',
-        how='left',
-        suffixes=('_quotes', '_tracker')
-    )
-
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN', 'Review History',
-        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
-        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
-            'QT:Quote ID',
-            'Submittal Date',
-            'Document Type - RAN',
-            'Review History',
-            'Doc Review Status Text',
-            'Date Approved',
-            'Rejection Notes',
-            'Redline Notes'
-        ]].rename(columns={
-            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
-            'Submittal Date': 'QT_SUBMITTAL_DATE',
-            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
-            'Review History': 'QT_QB__REVIEW_HISTORY',
-            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-            'Date Approved': 'QT_QB__DATE_APPROVED',
-            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
-            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
-        })
-        
-        # Save the differences to a new Excel file with a timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
-    else:
-        print("No differences found between the two files.")
 
