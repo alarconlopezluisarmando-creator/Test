@@ -171,3 +171,7 @@ if __name__ == "__main__':
     
     process_and_compare_files(quote_summary_file, quote_tracker_file)
 
+==error 
+
+An error occurred during file processing: "['Document Type - RAN_tracker', 'Review History_tracker', 'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'] not in index"
+
