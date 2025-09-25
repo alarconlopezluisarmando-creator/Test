@@ -817,5 +817,35 @@ Downloading file: /var/data/Support_Data/quickbase/Quotes/Quotes_Summary_2025-09
 File downloaded successfully to C:\path\to\your\local\directory\Quotes_Summary_2025-09-25_12-45-08.csv
 An error occurred during file processing: 'QT:Root Cell ID'
 
+==Columns name
+Quotes_Summary_*.csv
+Site #
+Submittal Date
+Document Type - RAN
+Review History
+Doc Review Status Text
+Date Approved
+Rejection Notes
+Redline Notes
+
+Quote_Tracker_Data_*.xlsx
+QT:Quote ID
+QT:QB - Document Type
+QT:QB - Doc Review Status Text
+QT:QB - Date Approved
+QT:QB - Rejection Notes
+QT:QB - Review History
+
+Columns for the new file 
+QUOTE_TRACKER_XITOR_KEY
+QT_QB__DOCUMENT_TYPE
+QT_SUBMITTAL_DATE
+QT_QB__DOC_REVIEW_STATUS_TEXT
+QT_QB__REJECTION_NOTES
+QT_QB__DATE_APPROVED
+QT_QB_RED_LINE_NOTES
+QT_QB__REVIEW_HISTORY
+
+
 
 
