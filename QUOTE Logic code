@@ -990,34 +990,15 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         print("No differences found between the two files.")
 
 
-# Main script execution
-try:
-    network_path = r'C:\path\to\your\local\directory'
-    
-    # Process for the first file (Quote_Tracker_Data_)
-    host1 = 'ftp.onevizion.com'
-    port1 = 22
-    username1 = 'sea2_es'
-    password1 = 'M5v3WV3ThaG9'
-    remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
-    file_prefix1 = 'Quote_Tracker_Data_'
-    tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
+== Error again 
 
-    # Process for the second file (Quotes_Summary_)
-    host2 = '105.52.12.194'
-    port2 = 1022
-    username2 = 'samrftool'
-    password2 = 'nyHOPokaG3SP'
-    remote_file_path2 = '/var/data/Support_Data/quickbase/Quotes/'
-    file_prefix2 = 'Quotes_Summary_'
-    quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
-
-    if quotes_file_path and tracker_file_path:
-        process_and_compare_files(quotes_file_path, tracker_file_path)
-    else:
-        print("One or both files failed to download. Comparison aborted.")
-except Exception as e:
-    print(f"An error occurred during file processing: {e}")
+Starting SFTP file download...
+Downloading file: /home/samsung_sea2/es/Rancomm/Quote_Tracker_Data_202509250801_51226.xlsx to C:\path\to\your\local\directory\Quote_Tracker_Data_202509250801_51226.xlsx
+File downloaded successfully to C:\path\to\your\local\directory\Quote_Tracker_Data_202509250801_51226.xlsx
+Starting SFTP file download...
+Downloading file: /var/data/Support_Data/quickbase/Quotes/Quotes_Summary_2025-09-25_13-00-07.csv to C:\path\to\your\local\directory\Quotes_Summary_2025-09-25_13-00-07.csv
+File downloaded successfully to C:\path\to\your\local\directory\Quotes_Summary_2025-09-25_13-00-07.csv
+An error occurred during file processing: 'Site #'
 
 
 
