@@ -76,8 +76,8 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
 try:
     host = 'ftp.onevizion.com'
     port = 22
-    username = 'sea2_es'
-    password = 'M5v3WV3ThaG9'
+    username = 'xxx'
+    password = 'xxx'
     remote_file_path = '/home/samsung_sea2/es/Rancomm/'
     file_prefix = 'Quote_Tracker_Data_'
     network_path = r'C:\path\to\your\local\directory'
@@ -97,8 +97,8 @@ except Exception as e:
 try:
     host = '105.52.12.194'
     port = 1022
-    username = 'samrftool'
-    password = 'nyHOPokaG3SP'
+    username = 'xxx'
+    password = 'xxx'
     remote_file_path = '/var/data/Support_Data/quickbase/Quotes/'
     file_prefix = 'Quotes_Summary_'
     network_path = r'C:\path\to\your\local\directory'
