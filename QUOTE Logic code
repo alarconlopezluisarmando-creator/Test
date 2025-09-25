@@ -106,12 +106,18 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     print("Quotes Summary Columns after stripping:", df_quotes.columns)
     print("Quote Tracker Columns after stripping:", df_tracker.columns)
     
-    # Check if 'Site #' column exists
-    if 'Site #' in df_quotes.columns:
-        print("'Site #' column exists in df_quotes")
+    # Check if 'Site #' column exists in both dataframes after stripping
+    if 'Site #' in df_quotes.columns and 'Site #' in df_tracker.columns:
+        print("Both dataframes contain the 'Site #' column.")
     else:
-        print("'Site #' column does not exist in df_quotes")
-        
+        print("Warning: 'Site #' is not in both dataframes. Check column names.")
+        # This will show which dataframe is missing the column
+        if 'Site #' not in df_quotes.columns:
+            print(f"'Site #' not found in df_quotes. Columns are: {list(df_quotes.columns)}")
+        if 'Site #' not in df_tracker.columns:
+            print(f"'Site #' not found in df_tracker. Columns are: {list(df_tracker.columns)}")
+        return
+
     # Try accessing the 'Site #' column directly
     try:
         print(df_quotes['Site #'].head())
@@ -123,8 +129,10 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         df_quotes.rename(columns=quotes_summary_map, inplace=True)
         df_tracker.rename(columns=tracker_data_map, inplace=True)
     except KeyError as e:
-        print(f"Error: The required column {e} was not found in one of the files.")
+        print(f"Error: The required column {e} was not found during renaming.")
         print("Please check your file headers for typos, extra spaces, or inconsistent naming.")
+        print(f"Columns in Quotes Summary: {list(df_quotes.columns)}")
+        print(f"Columns in Quote Tracker: {list(df_tracker.columns)}")
         return
         
     # Requirement 1: Format "Site #" in Quotes_Summary_
@@ -186,13 +194,3 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         print(f"Differences saved to: {output_path}")
     else:
         print("No differences found between the two files.")
-==Error site
-
-'Site #' column exists in df_quotes
-0    264.0
-1    581.0
-2    342.0
-3    276.0
-4    394.0
-Name: Site #, dtype: float64
-An error occurred during file processing: 'Site #'
