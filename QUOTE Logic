@@ -1,0 +1,115 @@
+Concatenate
+
+1. From the file Quotes_Summary_, I need that the column "Site #" convert to 4 digits, I mean, is the current value are 1 o 124, I need to add "0"s until we have 4 digits; in this case will be 0001 and 0124
+2. In the same file (Quotes_Summary_) we need to add a new column named QT:Quote ID; this column will be a vlook between the Quotes_Summary_ and Quote_Tracker_Data_ using the "Site #" and QT:Root Cell ID
+3. We need to add a second column named "Conca", in this column we need to concatenate the columsn QT:Quote ID+Document Type - RAN+Review History+Doc Review Status Text+Rejection Notes+Date Approved.
+4. In the file Quote_Tracker_Data_ we need to do the same. Add a new column named "Conca" and concatenate the columns QT:Quote ID+QT:QB - Document Type+QT:QB - Review History+QT:QB - Doc Review Status Text+QT:QB - Rejection Notes+QT:QB - Date Approved
+5. We need to compare between both files the same new column, if we have the same information in both, we discard, but if we find some differents, we need to add this in a new file named "QB_Quotes_timestamp".
+6. For this new file I need that the columns became in below order/name QUOTE_TRACKER_XITOR_KEY - QT_QB__DOCUMENT_TYPE - QT_SUBMITTAL_DATE - QT_QB__DOC_REVIEW_STATUS_TEXT - QT_QB__REJECTION_NOTES - QT_QB__DATE_APPROVED - QT_QB_RED_LINE_NOTES - QT_QB__REVIEW_HISTORY
+
+Could you help me updating below code with the requeriments that I did above?
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+import openpyxl
+
+
+def get_latest_file(sftp, remote_file_path, file_prefix):
+    """Get the latest file from the SFTP server based on the file prefix."""
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        if file.startswith(file_prefix):
+            try:
+                # If no timestamp format is provided, use the file's last modified time
+                file_stat = sftp.stat(os.path.join(remote_file_path, file))
+                timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
+    """Downloads a single file from an SFTP server to a specified network directory."""
+    print("Starting SFTP file download...")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
+        if latest_file:
+            full_remote_path = os.path.join(remote_file_path, latest_file)
+            full_local_path = os.path.join(output_network_path, latest_file)
+            print(f"Downloading file: {full_remote_path} to {full_local_path}")
+            try:
+                sftp.get(full_remote_path, full_local_path)
+                print(f"File downloaded successfully to {full_local_path}")
+                return full_local_path
+            except Exception as e:
+                print(f"Error downloading file: {e}")
+        else:
+            print("No matching files found in the specified SFTP directory.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+# Process for the first output
+try:
+    host = 'ftp.onevizion.com'
+    port = 22
+    username = 'sea2_es'
+    password = 'M5v3WV3ThaG9'
+    remote_file_path = '/home/samsung_sea2/es/Rancomm/'
+    file_prefix = 'Quote_Tracker_Data_'
+    network_path = r'C:\path\to\your\local\directory'
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            print(processed_df)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 1: {e}")
+
+# Process for the second output
+try:
+    host = '105.52.12.194'
+    port = 1022
+    username = 'samrftool'
+    password = 'nyHOPokaG3SP'
+    remote_file_path = '/var/data/Support_Data/quickbase/Quotes/'
+    file_prefix = 'Quotes_Summary_'
+    network_path = r'C:\path\to\your\local\directory'
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            print(processed_df)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 2: {e}")
