@@ -846,6 +846,179 @@ QT_QB__DATE_APPROVED
 QT_QB_RED_LINE_NOTES
 QT_QB__REVIEW_HISTORY
 
+== After give the name 
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+import openpyxl
+
+def get_latest_file(sftp, remote_file_path, file_prefix):
+    """Get the latest file from the SFTP server based on the file prefix."""
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        if file.startswith(file_prefix):
+            try:
+                # If no timestamp format is provided, use the file's last modified time
+                file_stat = sftp.stat(os.path.join(remote_file_path, file))
+                timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
+    """Downloads a single file from an SFTP server to a specified network directory."""
+    print("Starting SFTP file download...")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
+        if latest_file:
+            full_remote_path = os.path.join(remote_file_path, latest_file)
+            full_local_path = os.path.join(output_network_path, latest_file)
+            print(f"Downloading file: {full_remote_path} to {full_local_path}")
+            try:
+                sftp.get(full_remote_path, full_local_path)
+                print(f"File downloaded successfully to {full_local_path}")
+                return full_local_path
+            except Exception as e:
+                print(f"Error downloading file: {e}")
+        else:
+            print("No matching files found in the specified SFTP directory.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def process_and_compare_files(quote_summary_path, quote_tracker_path):
+    """
+    Processes and compares the two files based on the specified requirements.
+    """
+    try:
+        # Read the CSV file
+        df_quotes = pd.read_csv(quote_summary_path)
+        
+        # Read the Excel file, specifying the engine
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return # Stop execution if files can't be read
+
+    # Clean column names to remove any leading/trailing spaces
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    
+    # Requirement 1: Format "Site #" in Quotes_Summary_
+    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
+
+    # --- Use a more robust merge based on the provided file names ---
+    # Merge the two dataframes on the common "Site #" key
+    merged_df = pd.merge(
+        df_quotes, 
+        df_tracker,
+        on='Site #', 
+        how='outer',
+        suffixes=('_quotes', '_tracker')
+    )
+
+    # Requirement 3: Concatenate columns from Quotes_Summary_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #', 'Document Type - RAN', 'Review History', 
+        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes',
+        'QT:QB - Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    # Identify rows where the concatenated strings are different
+    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
+
+    # Requirement 6: Reorder and rename columns for the new file
+    if not df_diff.empty:
+        df_output = df_diff[[
+            'QT:Quote ID_tracker',
+            'QT:QB - Document Type',
+            'Submittal Date',
+            'QT:QB - Doc Review Status Text',
+            'QT:QB - Rejection Notes',
+            'QT:QB - Date Approved',
+            'Redline Notes',
+            'QT:QB - Review History'
+        ]].rename(columns={
+            'QT:Quote ID_tracker': 'QUOTE_TRACKER_XITOR_KEY',
+            'QT:QB - Document Type': 'QT_QB__DOCUMENT_TYPE',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'QT:QB - Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'QT:QB - Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'QT:QB - Date Approved': 'QT_QB__DATE_APPROVED',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES',
+            'QT:QB - Review History': 'QT_QB__REVIEW_HISTORY'
+        })
+        
+        # Save the differences to a new Excel file with a timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Differences saved to: {output_path}")
+    else:
+        print("No differences found between the two files.")
+
+
+# Main script execution
+try:
+    network_path = r'C:\path\to\your\local\directory'
+    
+    # Process for the first file (Quote_Tracker_Data_)
+    host1 = 'ftp.onevizion.com'
+    port1 = 22
+    username1 = 'sea2_es'
+    password1 = 'M5v3WV3ThaG9'
+    remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
+    file_prefix1 = 'Quote_Tracker_Data_'
+    tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
+
+    # Process for the second file (Quotes_Summary_)
+    host2 = '105.52.12.194'
+    port2 = 1022
+    username2 = 'samrftool'
+    password2 = 'nyHOPokaG3SP'
+    remote_file_path2 = '/var/data/Support_Data/quickbase/Quotes/'
+    file_prefix2 = 'Quotes_Summary_'
+    quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
+
+    if quotes_file_path and tracker_file_path:
+        process_and_compare_files(quotes_file_path, tracker_file_path)
+    else:
+        print("One or both files failed to download. Comparison aborted.")
+except Exception as e:
+    print(f"An error occurred during file processing: {e}")
+
 
 
 
