@@ -5,14 +5,15 @@ from datetime import datetime
 import openpyxl
 
 def get_latest_file(sftp, remote_file_path, file_prefix):
-    """Get the latest file from the SFTP server based on the file prefix."""
+    """
+    Get the latest file from the SFTP server based on the file prefix.
+    """
     files = sftp.listdir(remote_file_path)
     latest_file = None
     latest_timestamp = None
     for file in files:
         if file.startswith(file_prefix):
             try:
-                # If no timestamp format is provided, use the file's last modified time
                 file_stat = sftp.stat(os.path.join(remote_file_path, file))
                 timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
                 
@@ -24,7 +25,9 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
     return latest_file
 
 def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
-    """Downloads a single file from an SFTP server to a specified network directory."""
+    """
+    Downloads a single file from an SFTP server to a specified network directory.
+    """
     print("Starting SFTP file download...")
     ssh = None
     sftp = None
@@ -64,273 +67,7 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     """
     Processes and compares the two files based on the specified requirements.
     """
-    # Define the column name maps for each file
-    quotes_summary_map = {
-        'Site #': 'Site #',
-        'Submittal Date': 'Submittal Date',
-        'Document Type - RAN': 'Document Type - RAN',
-        'Review History': 'Review History',
-        'Doc Review Status Text': 'Doc Review Status Text',
-        'Date Approved': 'Date Approved',
-        'Rejection Notes': 'Rejection Notes',
-        'Redline Notes': 'Redline Notes'
-    }
-
-    tracker_data_map = {
-        'Site #': 'Site #',
-        'QT:Quote ID': 'QT:Quote ID',
-        'QT:QB - Document Type': 'QT:QB - Document Type',
-        'QT:QB - Doc Review Status Text': 'QT:QB - Doc Review Status Text',
-        'QT:QB - Date Approved': 'QT:QB - Date Approved',
-        'QT:QB - Rejection Notes': 'QT:QB - Rejection Notes',
-        'QT:QB - Review History': 'QT:QB - Review History'
-    }
-
     try:
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-    except FileNotFoundError:
-        print("Error: One of the files was not found.")
-        return
-    except Exception as e:
-        print(f"Error reading files: {e}")
-        return
-    
-    print("Quotes Summary Columns:", df_quotes.columns)
-    print("Quote Tracker Columns:", df_tracker.columns)
-    
-    # Clean column names to remove any leading/trailing spaces
-    df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
-    
-    print("Quotes Summary Columns after stripping:", df_quotes.columns)
-    print("Quote Tracker Columns after stripping:", df_tracker.columns)
-    
-    # Check if 'Site #' column exists in both dataframes after stripping
-    if 'Site #' in df_quotes.columns and 'Site #' in df_tracker.columns:
-        print("Both dataframes contain the 'Site #' column.")
-    else:
-        print("Warning: 'Site #' is not in both dataframes. Check column names.")
-        # This will show which dataframe is missing the column
-        if 'Site #' not in df_quotes.columns:
-            print(f"'Site #' not found in df_quotes. Columns are: {list(df_quotes.columns)}")
-        if 'Site #' not in df_tracker.columns:
-            print(f"'Site #' not found in df_tracker. Columns are: {list(df_tracker.columns)}")
-        return
-
-    # Try accessing the 'Site #' column directly
-    try:
-        print(df_quotes['Site #'].head())
-    except Exception as e:
-        print(f"Error accessing 'Site #' column: {e}")
-
-    # Rename columns using the defined maps
-    try:
-        df_quotes.rename(columns=quotes_summary_map, inplace=True)
-        df_tracker.rename(columns=tracker_data_map, inplace=True)
-    except KeyError as e:
-        print(f"Error: The required column {e} was not found during renaming.")
-        print("Please check your file headers for typos, extra spaces, or inconsistent naming.")
-        print(f"Columns in Quotes Summary: {list(df_quotes.columns)}")
-        print(f"Columns in Quote Tracker: {list(df_tracker.columns)}")
-        return
-        
-    # Requirement 1: Format "Site #" in Quotes_Summary_
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
-
-    # Merge the two dataframes on the common "Site #" key
-    merged_df = pd.merge(
-        df_quotes, 
-        df_tracker,
-        on='Site #', 
-        how='outer',
-        suffixes=('_quotes', '_tracker')
-    )
-
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN', 'Review History', 
-        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    merged_df['Conca_tracker'] = merged_df[[
-        'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Review History',
-        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes',
-        'QT:QB - Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    # Identify rows where the concatenated strings are different
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
-            'QT:Quote ID_tracker',
-            'QT:QB - Document Type',
-            'Submittal Date',
-            'QT:QB - Doc Review Status Text',
-            'QT:QB - Rejection Notes',
-            'QT:QB - Date Approved',
-            'Redline Notes',
-            'QT:QB - Review History'
-        ]].rename(columns={
-            'QT:Quote ID_tracker': 'QUOTE_TRACKER_XITOR_KEY',
-            'QT:QB - Document Type': 'QT_QB__DOCUMENT_TYPE',
-            'Submittal Date': 'QT_SUBMITTAL_DATE',
-            'QT:QB - Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-            'QT:QB - Rejection Notes': 'QT_QB__REJECTION_NOTES',
-            'QT:QB - Date Approved': 'QT_QB__DATE_APPROVED',
-            'Redline Notes': 'QT_QB_RED_LINE_NOTES',
-            'QT:QB - Review History': 'QT_QB__REVIEW_HISTORY'
-        })
-        
-        # Save the differences to a new Excel file with a timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
-    else:
-        print("No differences found between the two files.")
-
-# Main script execution
-try:
-    network_path = r'C:\path\to\your\local\directory'
-    
-    # Process for the first file (Quote_Tracker_Data_)
-    host1 = 'ftp.onevizion.com'
-    port1 = 22
-    username1 = 'sea2_es'
-    password1 = 'M5v3WV3ThaG9'
-    remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
-    file_prefix1 = 'Quote_Tracker_Data_'
-    tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
-
-    # Process for the second file (Quotes_Summary_)
-    host2 = '105.52.12.194'
-    port2 = 1022
-    username2 = 'samrftool'
-    password2 = 'nyHOPokaG3SP'
-    remote_file_path2 = '/var/data/Support_Data/quickbase/Quotes/'
-    file_prefix2 = 'Quotes_Summary_'
-    quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
-
-    if quotes_file_path and tracker_file_path:
-        process_and_compare_files(quotes_file_path, tracker_file_path)
-    else:
-        print("One or both files failed to download. Comparison aborted.")
-except Exception as e:
-    print(f"An error occurred during file processing: {e}")
-
-==Update
-
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
-    """
-    Processes and compares the two files based on the specified requirements.
-    """
-    try:
-        # Read the files
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-    except FileNotFoundError:
-        print("Error: One of the files was not found.")
-        return
-    except Exception as e:
-        print(f"Error reading files: {e}")
-        return
-
-    # Clean column names
-    df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
-    
-    # Rename columns in df_tracker to match df_quotes for the merge
-    # This is the key fix
-    df_tracker.rename(columns={
-        'QT:Root Cell ID': 'Site #',
-        'QT:QB - Document Type': 'Document Type - RAN',
-        'QT:QB - Doc Review Status Text': 'Doc Review Status Text',
-        'QT:QB - Date Approved': 'Date Approved',
-        'QT:QB - Rejection Notes': 'Rejection Notes',
-        'QT:QB - Review History': 'Review History'
-    }, inplace=True)
-
-    # Requirement 1: Format "Site #" in Quotes_Summary_
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
-
-    # Merge the two dataframes on the common "Site #" key
-    merged_df = pd.merge(
-        df_quotes,
-        df_tracker,
-        on='Site #',
-        how='outer',
-        suffixes=('_quotes', '_tracker')
-    )
-
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN_quotes', 'Review History_quotes',
-        'Doc Review Status Text_quotes', 'Rejection Notes_quotes', 'Date Approved_quotes'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'Document Type - RAN_tracker', 'Review History_tracker',
-        'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
-            'QT:Quote ID',
-            'Document Type - RAN_quotes',
-            'Submittal Date',
-            'Doc Review Status Text_quotes',
-            'Rejection Notes_quotes',
-            'Date Approved_quotes',
-            'Redline Notes',
-            'Review History_quotes'
-        ]].rename(columns={
-            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
-            'Document Type - RAN_quotes': 'QT_QB__DOCUMENT_TYPE',
-            'Submittal Date': 'QT_SUBMITTAL_DATE',
-            'Doc Review Status Text_quotes': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-            'Rejection Notes_quotes': 'QT_QB__REJECTION_NOTES',
-            'Date Approved_quotes': 'QT_QB__DATE_APPROVED',
-            'Redline Notes': 'QT_QB_RED_LINE_NOTES',
-            'Review History_quotes': 'QT_QB__REVIEW_HISTORY'
-        })
-
-        # Save the differences to a new Excel file with a timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
-    else:
-        print("No differences found between the two files.")
-
-QT:Quote ID	QUOTE_TRACKER_XITOR_KEY
-Submittal Date	QT_SUBMITTAL_DATE
-Document Type - RAN	QT_QB__DOCUMENT_TYPE
-Review History	QT_QB__REVIEW_HISTORY
-Doc Review Status Text	QT_QB__DOC_REVIEW_STATUS_TEXT
-Date Approved	QT_QB__DATE_APPROVED
-Rejection Notes	QT_QB__REJECTION_NOTES
-Redline Notes	QT_QB_RED_LINE_NOTES
-
-==Update
-
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
-    """
-    Processes and compares the two files based on the specified requirements.
-    """
-    try:
-        # Read the files
         df_quotes = pd.read_csv(quote_summary_path)
         df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
     except FileNotFoundError:
@@ -344,105 +81,15 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     df_quotes.columns = df_quotes.columns.str.strip()
     df_tracker.columns = df_tracker.columns.str.strip()
 
-    # Rename columns in df_tracker to match df_quotes for the merge
-    # This is the key fix
-    df_tracker.rename(columns={
-        'QT:Root Cell ID': 'Site #',
-        'QT:QB - Document Type': 'Document Type - RAN',
-        'QT:QB - Doc Review Status Text': 'Doc Review Status Text',
-        'QT:QB - Date Approved': 'Date Approved',
-        'QT:QB - Rejection Notes': 'Rejection Notes',
-        'QT:QB - Review History': 'Review History'
-    }, inplace=True)
-
-    # Requirement 1: Format "Site #" in Quotes_Summary_
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
-
-    # Merge the two dataframes on the common "Site #" key
-    merged_df = pd.merge(
-        df_quotes,
-        df_tracker,
-        on='Site #',
-        how='outer',
-        suffixes=('_quotes', '_tracker')
-    )
-
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN_quotes', 'Review History_quotes',
-        'Doc Review Status Text_quotes', 'Rejection Notes_quotes', 'Date Approved_quotes'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'Document Type - RAN_tracker', 'Review History_tracker',
-        'Doc Review Status Text_tracker', 'Rejection Notes_tracker', 'Date Approved_tracker'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
-            'QT:Quote ID',
-            'Submittal Date',
-            'Document Type - RAN_quotes',
-            'Review History_quotes',
-            'Doc Review Status Text_quotes',
-            'Date Approved_quotes',
-            'Rejection Notes_quotes',
-            'Redline Notes'
-        ]].rename(columns={
-            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
-            'Submittal Date': 'QT_SUBMITTAL_DATE',
-            'Document Type - RAN_quotes': 'QT_QB__DOCUMENT_TYPE',
-            'Review History_quotes': 'QT_QB__REVIEW_HISTORY',
-            'Doc Review Status Text_quotes': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-            'Date Approved_quotes': 'QT_QB__DATE_APPROVED',
-            'Rejection Notes_quotes': 'QT_QB__REJECTION_NOTES',
-            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
-        })
-        
-        # Save the differences to a new Excel file with a timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
-    else:
-        print("No differences found between the two files.")
-
-== Round three.
-
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
-    """
-    Processes and compares the two files based on the specified requirements.
-    """
-    try:
-        # Read the files
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-    except FileNotFoundError:
-        print("Error: One of the files was not found.")
-        return
-    except Exception as e:
-        print(f"Error reading files: {e}")
-        return
-
-    # Clean column names
-    df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
-
-    # The lookup is the key step. We need to rename the column in df_tracker
-    # so we can merge on a common name.
+    # The lookup is the key step. Rename the column in df_tracker
+    # to match the one in df_quotes for the merge.
     df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
 
     # Requirement 1: Format "Site #" in Quotes_Summary_
     df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
 
-    # Merge the two dataframes on the common "Site #" key.
-    # This acts as the "VLOOKUP".
+    # Merge the two dataframes on the common "Site #" key using a left join.
+    # This acts as the "VLOOKUP" to bring in the Quote ID and other tracker data.
     merged_df = pd.merge(
         df_quotes,
         df_tracker,
@@ -497,8 +144,30 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     else:
         print("No differences found between the two files.")
 
+# Main script execution
+if __name__ == "__main__':
+    # Define file paths (these should be replaced with your actual paths)
+    quote_summary_file = 'path/to/your/Quotes_Summary_.csv'
+    quote_tracker_file = 'path/to/your/Quote_Tracker_Data_.xlsx'
+    
+    # Example usage for the SFTP download function (uncomment and fill in details)
+    # This part is for downloading the files if they are not local.
+    #
+    # HOST = 'your_sftp_host'
+    # PORT = 22
+    # USER = 'your_sftp_username'
+    # PASSWORD = 'your_sftp_password'
+    # REMOTE_PATH = '/path/on/sftp/server'
+    # FILE_PREFIX = 'file_name_prefix'
+    # LOCAL_SAVE_PATH = 'C:/local/network/path'
+    #
+    # downloaded_file_path = download_file_from_sftp_to_network(
+    #     LOCAL_SAVE_PATH, HOST, PORT, USER, PASSWORD, REMOTE_PATH, FILE_PREFIX
+    # )
 
-
-
-
+    # Example of how to use the processing function
+    # Replace the file paths with the actual locations of your files.
+    # If you use the SFTP download, use the path returned by the function.
+    
+    process_and_compare_files(quote_summary_file, quote_tracker_file)
 
