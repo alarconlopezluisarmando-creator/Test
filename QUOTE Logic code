@@ -582,3 +582,12 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         print("No differences found between the two files.")
 
 
+== Error 
+
+Starting SFTP file download...
+Downloading file: /home/samsung_sea2/es/Rancomm/Quote_Tracker_Data_202509250801_51226.xlsx to C:\path\to\your\local\directory\Quote_Tracker_Data_202509250801_51226.xlsx
+File downloaded successfully to C:\path\to\your\local\directory\Quote_Tracker_Data_202509250801_51226.xlsx
+Starting SFTP file download...
+Downloading file: /var/data/Support_Data/quickbase/Quotes/Quotes_Summary_2025-09-25_12-45-08.csv to C:\path\to\your\local\directory\Quotes_Summary_2025-09-25_12-45-08.csv
+File downloaded successfully to C:\path\to\your\local\directory\Quotes_Summary_2025-09-25_12-45-08.csv
+Error: The quotes DataFrame does not have enough columns.
