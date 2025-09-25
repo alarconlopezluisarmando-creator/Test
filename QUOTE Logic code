@@ -186,3 +186,13 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         print(f"Differences saved to: {output_path}")
     else:
         print("No differences found between the two files.")
+==Error site
+
+'Site #' column exists in df_quotes
+0    264.0
+1    581.0
+2    342.0
+3    276.0
+4    394.0
+Name: Site #, dtype: float64
+An error occurred during file processing: 'Site #'
