@@ -456,8 +456,8 @@ try:
     # Process for the first file (Quote_Tracker_Data_)
     host1 = 'ftp.onevizion.com'
     port1 = 22
-    username1 = 'sea2_es'
-    password1 = 'M5v3WV3ThaG9'
+    username1 = 'sxxxxes'
+    password1 = 'xxx'
     remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
     file_prefix1 = 'Quote_Tracker_Data_'
     tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
@@ -465,8 +465,8 @@ try:
     # Process for the second file (Quotes_Summary_)
     host2 = '105.52.12.194'
     port2 = 1022
-    username2 = 'samrftool'
-    password2 = 'nyHOPokaG3SP'
+    username2 = 'xxx'
+    password2 = 'xxx'
     remote_file_path2 = '/var/data/Support_Data/quickbase/Quotes/'
     file_prefix2 = 'Quotes_Summary_'
     quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
@@ -478,5 +478,107 @@ try:
 except Exception as e:
     print(f"An error occurred during file processing: {e}")
 
+== Update code 
+
+def process_and_compare_files(quote_summary_path, quote_tracker_path):
+    """
+    Processes and compares the two files based on the specified requirements.
+    """
+    # Read the CSV file
+    df_quotes = pd.read_csv(quote_summary_path)
+    
+    # Read the Excel file, specifying the engine
+    df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    
+    # --- NEW FIX: Clean column names to remove any leading/trailing spaces ---
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    # ----------------------------------------------------------------------
+    
+    # Requirement 1: Format "Site #" in Quotes_Summary_
+    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.zfill(4)
+
+    # Requirement 2: Add 'QT:Quote ID' to Quotes_Summary_ using VLOOKUP
+    df_quotes = pd.merge(df_quotes, df_tracker[['Site #', 'QT:Root Cell ID', 'QT:Quote ID']],
+                         on=['Site #', 'QT:Root Cell ID'], how='left')
+
+    # Requirement 3: Concatenate columns in Quotes_Summary_
+    df_quotes['Conca'] = df_quotes[['QT:Quote ID', 'Document Type - RAN', 'Review History',
+                                     'Doc Review Status Text', 'Rejection Notes', 'Date Approved']].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate columns in Quote_Tracker_Data_
+    df_tracker['Conca'] = df_tracker[['QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Review History',
+                                       'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes',
+                                       'QT:QB - Date Approved']].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    # We'll merge the two files on 'Site #' and 'QT:Quote ID' to find discrepancies
+    merged_df = pd.merge(df_quotes[['Site #', 'QT:Quote ID', 'Conca']],
+                         df_tracker[['Site #', 'QT:Quote ID', 'Conca']],
+                         on=['Site #', 'QT:Quote ID'],
+                         how='outer',
+                         suffixes=('_quotes', '_tracker'))
+    
+    # Identify rows where the concatenated strings are different
+    # Use a boolean mask to filter for differences, handling NaNs
+    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
+
+    # Requirement 6: Reorder and rename columns for the new file
+    if not df_diff.empty:
+        df_output = df_diff.rename(columns={
+            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            'QT:QB - Document Type': 'QT_QB__DOCUMENT_TYPE',
+            'QT:QB - Submittal Date': 'QT_SUBMITTAL_DATE',
+            'QT:QB - Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'QT:QB - Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'QT:QB - Date Approved': 'QT_QB__DATE_APPROVED',
+            'QT:QB - Red Line Notes': 'QT_QB_RED_LINE_NOTES',
+            'QT:QB - Review History': 'QT_QB__REVIEW_HISTORY'
+        })
+        
+        # Select and reorder the final columns
+        final_columns = [
+            'QUOTE_TRACKER_XITOR_KEY',
+            'QT_QB__DOCUMENT_TYPE',
+            'QT_SUBMITTAL_DATE',
+            'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'QT_QB__REJECTION_NOTES',
+            'QT_QB__DATE_APPROVED',
+            'QT_QB_RED_LINE_NOTES',
+            'QT_QB__REVIEW_HISTORY'
+        ]
+        
+        # We need to make sure the columns exist before selecting them
+        # Let's get the necessary columns from the original dataframes
+        df_tracker_for_output = df_tracker.merge(df_diff, on=['Site #', 'QT:Quote ID'], how='inner')
+
+        df_output = df_tracker_for_output[[
+            'QT:Quote ID',
+            'QT:QB - Document Type',
+            'QT:QB - Submittal Date',
+            'QT:QB - Doc Review Status Text',
+            'QT:QB - Rejection Notes',
+            'QT:QB - Date Approved',
+            'QT:QB - Red Line Notes',
+            'QT:QB - Review History'
+        ]].rename(columns={
+            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            'QT:QB - Document Type': 'QT_QB__DOCUMENT_TYPE',
+            'QT:QB - Submittal Date': 'QT_SUBMITTAL_DATE',
+            'QT:QB - Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'QT:QB - Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'QT:QB - Date Approved': 'QT_QB__DATE_APPROVED',
+            'QT:QB - Red Line Notes': 'QT_QB_RED_LINE_NOTES',
+            'QT:QB - Review History': 'QT_QB__REVIEW_HISTORY'
+        })
+        
+        # Save the differences to a new Excel file with a timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Differences saved to: {output_path}")
+    else:
+        print("No differences found between the two files.")
 
 
