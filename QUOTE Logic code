@@ -89,28 +89,34 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
     try:
         df_quotes = pd.read_csv(quote_summary_path)
         df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError:
+        print("Error: One of the files was not found.")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+    
+    print("Quotes Summary Columns:", df_quotes.columns)
+    print("Quote Tracker Columns:", df_tracker.columns)
+    
+    # Clean column names to remove any leading/trailing spaces
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    
+    print("Quotes Summary Columns after stripping:", df_quotes.columns)
+    print("Quote Tracker Columns after stripping:", df_tracker.columns)
+    
+    # Check if 'Site #' column exists
+    if 'Site #' in df_quotes.columns:
+        print("'Site #' column exists in df_quotes")
+    else:
+        print("'Site #' column does not exist in df_quotes")
         
-        print("Quotes Summary Columns:", df_quotes.columns)
-        print("Quote Tracker Columns:", df_tracker.columns)
-        
-        # Clean column names to remove any leading/trailing spaces
-        df_quotes.columns = df_quotes.columns.str.strip()
-        df_tracker.columns = df_tracker.columns.str.strip()
-        
-        print("Quotes Summary Columns after stripping:", df_quotes.columns)
-        print("Quote Tracker Columns after stripping:", df_tracker.columns)
-        
-        # Check if 'Site #' column exists
-        if 'Site #' in df_quotes.columns:
-            print("'Site #' column exists in df_quotes")
-        else:
-            print("'Site #' column does not exist in df_quotes")
-            
-        # Try accessing the 'Site #' column directly
-        try:
-            print(df_quotes['Site #'].head())
-        except Exception as e:
-            print(f"Error accessing 'Site #' column: {e}")
+    # Try accessing the 'Site #' column directly
+    try:
+        print(df_quotes['Site #'].head())
+    except Exception as e:
+        print(f"Error accessing 'Site #' column: {e}")
 
     # Rename columns using the defined maps
     try:
@@ -180,11 +186,3 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
         print(f"Differences saved to: {output_path}")
     else:
         print("No differences found between the two files.")
-
-I got below error, 
-Could you help me to fixed?
-
-Cell In[62], line 116
-    try:
-    ^
-SyntaxError: expected 'except' or 'finally' block
