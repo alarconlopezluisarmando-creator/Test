@@ -5,7 +5,8 @@ from datetime import datetime
 import openpyxl
 import re 
 
-# --- SFTP Functions remain the same (They handle the single CSV download) ---
+# --- SFTP Functions (Remain the same, but used twice) ---
+
 def get_latest_file(sftp, remote_file_path, file_prefix):
     """
     Get the latest file from the SFTP server based on the file prefix.
@@ -29,8 +30,9 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
 def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
     """
     Downloads a single file from an SFTP server to a specified network directory.
+    Returns the full local path of the downloaded file.
     """
-    print("Starting SFTP file download...")
+    print(f"Starting SFTP file download for prefix: {file_prefix}")
     ssh = None
     sftp = None
     try:
@@ -53,7 +55,7 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
             except Exception as e:
                 print(f"Error downloading file: {e}")
         else:
-            print("No matching files found in the specified SFTP directory.")
+            print(f"No matching files found with prefix {file_prefix} in the specified SFTP directory.")
             return None
 
     except Exception as e:
@@ -65,18 +67,22 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
         if ssh:
             ssh.close()
 
+# --- Core Processing Function (Same logic, but now expecting two downloaded paths) ---
+
 def process_and_compare_files(quote_report_path, quote_tracker_path):
     """
     Reads the two files, extracts Quote ID from the report, and compares them 
-    on the 'Site #' key to find discrepancies.
+    on the 'QT:Quote ID' key to find discrepancies.
     """
     print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
     
     try:
+        # Read the Quote Report (CSV)
         df_quotes = pd.read_csv(quote_report_path)
+        # Read the Quote Tracker (Excel)
         df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
     except FileNotFoundError as e:
-        print(f"Error: One of the files was not found. Details: {e}")
+        print(f"Error: One of the downloaded files was not found at its local path. Details: {e}")
         return
     except Exception as e:
         print(f"Error reading files: {e}")
@@ -89,40 +95,43 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     # --- NEW: Extract QT:Quote ID from 'Document' column (Quotes_Report_) ---
     if 'Document' in df_quotes.columns:
         try:
-            # We now keep the Site # (first part) AND the Quote ID (second part)
+            # We are extracting the unique Quote ID from the Document column
             split_df = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)
-            # The Quote ID is the second part (index 1)
             df_quotes['QT:Quote ID'] = split_df[1].str.strip()
+            
+            # Since 'Site #' is no longer the merge key, we keep this for context
+            if 'Site #' in df_quotes.columns:
+                df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
         except KeyError:
             print("Warning: Could not extract 'QT:Quote ID' from 'Document' column.")
             df_quotes['QT:Quote ID'] = None
+            return
     else:
         print("Error: The required 'Document' column was not found in the report.")
         return
 
     # --- Data Standardization for Merge ---
-    # Standardize 'Site #' in the downloaded report
-    if 'Site #' in df_quotes.columns:
-        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-    else:
-        print("Error: The required 'Site #' column was not found in the Quotes Report.")
-        return
-    
-    # Standardize 'Site #' in the local tracker
-    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-    if 'Site #' in df_tracker.columns:
+    # 1. Rename the Tracker's Site ID to match the Report's naming convention for comparison later
+    if 'QT:Root Cell ID' in df_tracker.columns:
+        df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
+        # Standardize Site # in the local tracker
         df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
     else:
         print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
         return
+    
+    # 2. Ensure the Quote IDs are clean strings in both files for a reliable match
+    if 'QT:Quote ID' in df_tracker.columns:
+        df_tracker['QT:Quote ID'] = df_tracker['QT:Quote ID'].astype(str).str.strip()
+    else:
+        print("Error: The required 'QT:Quote ID' column was not found in the Tracker file.")
+        return
 
-
-    # --- Merge (Comparison) ---
-    # Merge the two dataframes on the common "Site #" key using a left join.
+    # --- CRITICAL CHANGE: Merge on the unique "QT:Quote ID" key ---
     merged_df = pd.merge(
         df_quotes,
         df_tracker,
-        on='Site #',
+        on='QT:Quote ID', # <--- MERGING ON THE UNIQUE ID
         how='left',
         suffixes=('_quotes', '_tracker')
     )
@@ -130,13 +139,13 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     # --- Comparison Logic ---
     # Requirement 3: Concatenate key columns from Quotes_Report_
     merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN', 'Review History',
+        'Site #_quotes', 'Document Type - RAN', 'Review History',
         'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
     ]].astype(str).agg('|'.join, axis=1)
 
     # Requirement 4: Concatenate key columns from Quote_Tracker_Data_
     merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'Site #_tracker', 'QT:QB - Document Type', 'QT:QB - Review History',
         'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
     ]].astype(str).agg('|'.join, axis=1)
 
@@ -161,7 +170,6 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     # ====================================================================
     if not df_diff.empty:
         df_output = df_diff[[
-            # Use the newly extracted Quote ID from the Report file
             'QT:Quote ID',
             'Submittal Date',
             'Document Type - RAN',
@@ -197,28 +205,38 @@ if __name__ == '__main__':
     SFTP_PORT = 22 
     SFTP_USERNAME = 'your_username'
     SFTP_PASSWORD = 'your_password'
-    REMOTE_DIR = '/path/on/sftp/server/'
+    REMOTE_DIR = '/path/on/sftp/server/' # Assuming both files are in the same remote directory
     LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\'
-    FILE_PREFIX_TO_DOWNLOAD = 'Quotes_Report_' 
 
-    # --- LOCAL FILE PATH ---
-    # !!! IMPORTANT: SET THE CORRECT LOCAL PATH FOR THE TRACKER FILE !!!
-    # This file must exist at this exact path for the comparison to work.
-    QUOTE_TRACKER_FILE_PATH = 'C:\\Local\\Path\\to\\Quote_Tracker_Data_.xlsx' 
+    # --- FILE PREFIXES ---
+    FILE_PREFIX_REPORT = 'Quotes_Report_' 
+    # !!! IMPORTANT: Replace 'Quote_Tracker_Data_' with the ACTUAL prefix of the Tracker file on SFTP
+    FILE_PREFIX_TRACKER = 'Quote_Tracker_Data_' 
 
     # 1. Download the latest Quotes_Report_.csv file
-    downloaded_path = download_file_from_sftp_to_network(
+    downloaded_report_path = download_file_from_sftp_to_network(
         LOCAL_NETWORK_PATH, 
         SFTP_HOST, 
         SFTP_PORT, 
         SFTP_USERNAME, 
         SFTP_PASSWORD, 
         REMOTE_DIR, 
-        FILE_PREFIX_TO_DOWNLOAD
+        FILE_PREFIX_REPORT
     )
 
-    # 2. Process and compare the downloaded file with the local tracker file
-    if downloaded_path:
-        process_and_compare_files(downloaded_path, QUOTE_TRACKER_FILE_PATH)
+    # 2. Download the latest Quote_Tracker_Data_.xlsx file
+    downloaded_tracker_path = download_file_from_sftp_to_network(
+        LOCAL_NETWORK_PATH, 
+        SFTP_HOST, 
+        SFTP_PORT, 
+        SFTP_USERNAME, 
+        SFTP_PASSWORD, 
+        REMOTE_DIR, 
+        FILE_PREFIX_TRACKER
+    )
+
+    # 3. Process and compare both downloaded files
+    if downloaded_report_path and downloaded_tracker_path:
+        process_and_compare_files(downloaded_report_path, downloaded_tracker_path)
     else:
-        print("Could not proceed with file processing as no file was downloaded.")
+        print("\nCould not proceed with file processing as one or both files were not downloaded.")
