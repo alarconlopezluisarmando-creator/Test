@@ -5,8 +5,8 @@ from datetime import datetime
 import openpyxl
 import re 
 
-# --- SFTP Functions ---
-
+# --- SFTP Functions (get_latest_file and download_file_from_sftp_to_network remain the same) ---
+# ... (SFTP Functions are omitted for brevity, as they remain unchanged) ...
 def get_latest_file(sftp, remote_file_path, file_prefix):
     """
     Get the latest file from the SFTP server based on the file prefix.
@@ -71,10 +71,14 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
 
 def process_and_compare_files(quote_report_path, quote_tracker_path):
     """
-    Reads the two files, extracts Quote ID from the report, standardizes
-    the Quote IDs in BOTH files to ensure a correct merge, and compares them.
+    Reads the two files, uses REGEX to cleanly extract Quote ID, creates a 
+    SITE# + QUOTE_ID composite key, and compares the files.
     """
     print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
+    
+    # Define a regex pattern to reliably extract the core Quote ID (e.g., 'SV0282.00')
+    # This pattern looks for two uppercase letters followed by digits and a decimal point.
+    QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
     
     try:
         df_quotes = pd.read_csv(quote_report_path)
@@ -92,29 +96,26 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
 
     # --- Data Standardization for Merge ---
 
-    # 1. Extract and Clean QT:Quote ID from 'Document' column (Quotes_Report_)
+    # 1. Process Quotes Report
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+
     if 'Document' in df_quotes.columns:
-        try:
-            # Split the column by the first underscore
-            split_df = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)
-            
-            # Take the second part (Quote ID) and strip leading/trailing whitespace
-            df_quotes['QT:Quote ID'] = split_df[1].str.strip()
-            
-            # Apply robust cleaning to remove file extensions (.xlsx, .pdf, etc.) from the extracted ID
-            df_quotes['QT:Quote ID'] = df_quotes['QT:Quote ID'].str.replace(r'\.(xlsx|csv|pdf)$', '', regex=True, flags=re.IGNORECASE)
-            
-            if 'Site #' in df_quotes.columns:
-                df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-        except KeyError:
-            print("Warning: Could not extract 'QT:Quote ID' from 'Document' column.")
-            df_quotes['QT:Quote ID'] = None
-            return
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        
+        # Check if extraction was successful for any row
+        if df_quotes['QT:Quote ID'].eq('').all():
+             print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
+             return
     else:
         print("Error: The required 'Document' column was not found in the report.")
         return
 
-    # 2. Standardize/Clean the Tracker File
+    # 2. Process Quote Tracker
     if 'QT:Root Cell ID' in df_tracker.columns:
         df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
         df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
@@ -123,27 +124,31 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         return
     
     if 'QT:Quote ID' in df_tracker.columns:
-        df_tracker['QT:Quote ID'] = df_tracker['QT:Quote ID'].astype(str).str.strip()
-        # Apply robust cleaning to the Tracker's Quote ID as well for clean merging
-        df_tracker['QT:Quote ID'] = df_tracker['QT:Quote ID'].str.replace(r'\.(xlsx|csv|pdf)$', '', regex=True, flags=re.IGNORECASE)
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_tracker['QT:Quote ID'] = df_tracker['QT:Quote ID'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
     else:
         print("Error: The required 'QT:Quote ID' column was not found in the Tracker file.")
         return
 
-    # --- Merge on the unique "QT:Quote ID" key ---
+    # --- CRITICAL FIX: Create Composite Merge Key ---
+    # Merge will now happen on SITE# + QUOTE ID, ensuring a unique 1:1 match
+    df_quotes['MERGE_KEY'] = df_quotes['Site #'] + '_' + df_quotes['QT:Quote ID']
+    df_tracker['MERGE_KEY'] = df_tracker['Site #'] + '_' + df_tracker['QT:Quote ID']
+
+    # --- Merge on the unique "MERGE_KEY" ---
     merged_df = pd.merge(
         df_quotes,
         df_tracker,
-        on='QT:Quote ID',
+        on='MERGE_KEY', # Using the new composite key
         how='left',
         suffixes=('_quotes', '_tracker')
     )
     
-    # ** Diagnostic Check for Failed Merges **
+    # ** Diagnostic Check **
     if merged_df['Site #_tracker'].isnull().all() and not df_quotes.empty:
         print("\n*** WARNING: ALL TRACKER COLUMNS ARE LIKELY BLANK (MERGE FAILURE) ***")
-        print("This means NO QT:Quote ID matched between the Report and the Tracker.")
-        print("Check if the IDs in both files are formatted EXACTLY the same.")
+        print("This means NO COMPOSITE KEY matched between the Report and the Tracker.")
+        print("Check Site # and Quote ID cleaning logic.")
         
     # --- Comparison Logic ---
     # Requirement 3: Concatenate key columns from Quotes_Report_
@@ -163,7 +168,7 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     df_diff = merged_df[(merged_df['Conca_quotes'] != merged_df['Conca_tracker']) | merged_df['Site #_tracker'].isnull()]
     
     # Remove rows where the Report's Quote ID was invalid (blank)
-    df_diff = df_diff[df_diff['QT:Quote ID'].notna() & (df_diff['QT:Quote ID'] != '')]
+    df_diff = df_diff[df_diff['QT:Quote ID_quotes'].notna() & (df_diff['QT:Quote ID_quotes'] != '')]
 
     # ====================================================================
     # === OUTPUT: DEBUG/COMPARISON FILE (Raw data of differences) ===
@@ -173,6 +178,7 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
         debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name)
         
+        # Include the MERGE_KEY in the debug file for easy validation
         df_diff.to_excel(debug_output_path, index=False)
         print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences (merged raw data) saved to: {debug_output_path}")
 
@@ -181,8 +187,8 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     # ====================================================================
     if not df_diff.empty:
         df_output = df_diff[[
-            # Use the clean, extracted QT:Quote ID
-            'QT:Quote ID', 
+            # Use the clean, extracted QT:Quote ID from the quotes file (Source of Truth)
+            'QT:Quote ID_quotes', 
             'Submittal Date',
             'Document Type - RAN',
             'Review History',
@@ -191,7 +197,8 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
             'Rejection Notes',
             'Redline Notes'
         ]].rename(columns={
-            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            # The output key is now guaranteed to be the clean, core Quote ID
+            'QT:Quote ID_quotes': 'QUOTE_TRACKER_XITOR_KEY',
             'Submittal Date': 'QT_SUBMITTAL_DATE',
             'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
             'Review History': 'QT_QB__REVIEW_HISTORY',
@@ -210,20 +217,18 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         print("No differences found between the two files. Final report not created.")
 
 # --------------------------------------------------------------------------------------------------
-# Main script execution
+# Main script execution (remains the same)
 if __name__ == '__main__':
     # --- SFTP Configuration ---
-    # !!! IMPORTANT: REPLACE THESE PLACEHOLDERS WITH YOUR ACTUAL VALUES !!!
     SFTP_HOST = 'your_sftp_host'
     SFTP_PORT = 22 
     SFTP_USERNAME = 'your_username'
     SFTP_PASSWORD = 'your_password'
     REMOTE_DIR = '/path/on/sftp/server/' 
-    LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\' # Where files will be downloaded to
+    LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\'
 
     # --- FILE PREFIXES ---
     FILE_PREFIX_REPORT = 'Quotes_Report_' 
-    # !!! IMPORTANT: Verify the actual prefix of the Quote Tracker file on the SFTP
     FILE_PREFIX_TRACKER = 'Quote_Tracker_Data_' 
 
     # 1. Download the latest Quotes_Report_.csv file
@@ -253,7 +258,3 @@ if __name__ == '__main__':
         process_and_compare_files(downloaded_report_path, downloaded_tracker_path)
     else:
         print("\nCould not proceed with file processing as one or both files were not downloaded.")
-
-
-SV0282.00-Service_BMS_1_09-18-2025
-SV0282.00-Service_BMS_1_09-18-2025
