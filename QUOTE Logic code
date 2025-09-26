@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import openpyxl
+import re # Import the regular expression module for safer extraction
 
 def get_latest_file(sftp, remote_file_path, file_prefix):
     """
@@ -12,6 +13,7 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
     latest_file = None
     latest_timestamp = None
     for file in files:
+        # NOTE: Updated file prefix check to look for 'Quotes_Report_'
         if file.startswith(file_prefix):
             try:
                 file_stat = sftp.stat(os.path.join(remote_file_path, file))
@@ -27,6 +29,7 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
 def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
     """
     Downloads a single file from an SFTP server to a specified network directory.
+    NOTE: The file_prefix for this function should be 'Quotes_Report_'.
     """
     print("Starting SFTP file download...")
     ssh = None
@@ -63,58 +66,60 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
         if ssh:
             ssh.close()
 
-def process_and_compare_files(quote_summary_path, quote_tracker_path):
+# The function name is updated to reflect that only one file is processed now
+def process_quote_report(quote_report_path):
     """
-    Processes and compares the two files based on the specified requirements.
+    Processes the Quotes_Report_.csv file to extract the Quote ID and prepares 
+    the final output based on the original comparison logic (now simplified).
     """
     try:
-        df_quotes = pd.read_csv(quote_summary_path)
-        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+        # Read the file. Ensure the name matches the new requirement.
+        df_quotes = pd.read_csv(quote_report_path)
     except FileNotFoundError:
-        print("Error: One of the files was not found.")
+        print(f"Error: The file {quote_report_path} was not found.")
         return
     except Exception as e:
-        print(f"Error reading files: {e}")
+        print(f"Error reading file: {e}")
         return
 
     # Clean column names
     df_quotes.columns = df_quotes.columns.str.strip()
-    df_tracker.columns = df_tracker.columns.str.strip()
 
-    # CRITICAL: Clean and standardize the join columns in both dataframes
-    # This is the most likely reason for the empty Quote IDs.
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-    
-    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-    df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    # --- NEW REQUIREMENT 3: Extract QUOTE ID from 'Document' column ---
+    # Perform Text to Column using '_' as a delimiter. 
+    # The required ID is the *second* part (index 1) which looks like SV0292.01.
+    if 'Document' in df_quotes.columns:
+        # Use .str.split('_', expand=True) to split the column
+        # and take the second element [1] as the QUOTE ID.
+        # .str.split('_', n=1, expand=True)[1] is safer if there are multiple underscores.
+        try:
+            df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)[1].str.strip()
+        except KeyError:
+            # Handle case where split doesn't produce enough columns (e.g., no '_')
+            print("Warning: Could not extract 'QT:Quote ID' from 'Document' column. Check file format.")
+            df_quotes['QT:Quote ID'] = None
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
 
-    # Merge the two dataframes on the common "Site #" key using a left join.
-    merged_df = pd.merge(
-        df_quotes,
-        df_tracker,
-        on='Site #',
-        how='left',
-        suffixes=('_quotes', '_tracker')
-    )
+    # --- LOGIC SIMPLIFICATION (Original comparison logic removed/adapted) ---
+    # Since the VLOOKUP and comparison are removed, the dataframe *is* the final output.
+    # The original logic (Requirement 3, 4, 5) was for comparison, which is now obsolete.
+    # We will skip to the final column reordering and renaming.
 
-    # Requirement 3: Concatenate columns from Quotes_Summary_
-    merged_df['Conca_quotes'] = merged_df[[
-        'Site #', 'Document Type - RAN', 'Review History',
-        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 4: Concatenate columns from Quote_Tracker_Data_
-    merged_df['Conca_tracker'] = merged_df[[
-        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
-        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
-    ]].astype(str).agg('|'.join, axis=1)
-
-    # Requirement 5: Compare and find differences
-    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
+    # Filter out rows where the QUOTE ID couldn't be extracted, if necessary
+    df_output = df_quotes[df_quotes['QT:Quote ID'].notna()]
 
     # Requirement 6: Reorder and rename columns for the new file
-    if not df_diff.empty:
-        df_output = df_diff[[
+    # NOTE: The original output logic assumed two files (quotes and tracker) and compared them.
+    # Now, we are producing an output that *resembles* the original final output file,
+    # but based only on the single input file.
+    
+    # We will rename the columns in the final output file as per your original requirement 6.
+    
+    if not df_output.empty:
+        # Select the necessary columns from the single input file
+        df_output = df_output[[
             'QT:Quote ID',
             'Submittal Date',
             'Document Type - RAN',
@@ -134,21 +139,45 @@ def process_and_compare_files(quote_summary_path, quote_tracker_path):
             'Redline Notes': 'QT_QB_RED_LINE_NOTES'
         })
         
-        # Save the differences to a new Excel file with a timestamp
+        # Save the result to a new Excel file with a timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # The output file name remains the same as your previous final file.
         output_file_name = f"QB_Quotes_timestamp_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_summary_path), output_file_name)
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
         df_output.to_excel(output_path, index=False)
-        print(f"Differences saved to: {output_path}")
+        print(f"Processed report saved to: {output_path}")
     else:
-        print("No differences found between the two files.")
+        print("The processed dataframe is empty or could not extract Quote IDs.")
 
-# Main script execution (same as before)
+# Main script execution
 if __name__ == '__main__':
     # Define file paths (these should be replaced with your actual paths)
-    quote_summary_file = 'path/to/your/Quotes_Summary_.csv'
-    quote_tracker_file = 'path/to/your/Quote_Tracker_Data_.xlsx'
+    # --- REQUIREMENT 2: Change file name to Quotes_Report_.csv ---
+    quote_report_file = 'path/to/your/Quotes_Report_.csv'
     
-    # ... (rest of the main script, including SFTP download, if needed)
-    
-    process_and_compare_files(quote_summary_file, quote_tracker_file)
+    # --- SFTP Configuration ---
+    # IMPORTANT: Replace these with your actual connection details and paths
+    SFTP_HOST = 'your_sftp_host'
+    SFTP_PORT = 22 # Default SFTP port
+    SFTP_USERNAME = 'your_username'
+    SFTP_PASSWORD = 'your_password'
+    REMOTE_DIR = '/path/on/sftp/server/'
+    LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\'
+    FILE_PREFIX_TO_DOWNLOAD = 'Quotes_Report_' # Matches the new report name
+
+    # 1. Download the latest Quotes_Report_.csv file
+    downloaded_path = download_file_from_sftp_to_network(
+        LOCAL_NETWORK_PATH, 
+        SFTP_HOST, 
+        SFTP_PORT, 
+        SFTP_USERNAME, 
+        SFTP_PASSWORD, 
+        REMOTE_DIR, 
+        FILE_PREFIX_TO_DOWNLOAD
+    )
+
+    # 2. Process the downloaded file
+    if downloaded_path:
+        process_quote_report(downloaded_path)
+    else:
+        print("Could not proceed with file processing as no file was downloaded.")
