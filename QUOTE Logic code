@@ -152,4 +152,3 @@ if __name__ == '__main__':
     # ... (rest of the main script, including SFTP download, if needed)
     
     process_and_compare_files(quote_summary_file, quote_tracker_file)
-
