@@ -181,3 +181,189 @@ if __name__ == '__main__':
         process_quote_report(downloaded_path)
     else:
         print("Could not proceed with file processing as no file was downloaded.")
+
+
+== Code updated
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+import openpyxl
+import re 
+
+# ... (SFTP functions remain the same) ...
+def get_latest_file(sftp, remote_file_path, file_prefix):
+    """
+    Get the latest file from the SFTP server based on the file prefix.
+    """
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        # NOTE: Updated file prefix check to look for 'Quotes_Report_'
+        if file.startswith(file_prefix):
+            try:
+                file_stat = sftp.stat(os.path.join(remote_file_path, file))
+                timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
+    """
+    Downloads a single file from an SFTP server to a specified network directory.
+    NOTE: The file_prefix for this function should be 'Quotes_Report_'.
+    """
+    print("Starting SFTP file download...")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
+        if latest_file:
+            full_remote_path = os.path.join(remote_file_path, latest_file)
+            full_local_path = os.path.join(output_network_path, latest_file)
+            print(f"Downloading file: {full_remote_path} to {full_local_path}")
+            try:
+                sftp.get(full_remote_path, full_local_path)
+                print(f"File downloaded successfully to {full_local_path}")
+                return full_local_path
+            except Exception as e:
+                print(f"Error downloading file: {e}")
+        else:
+            print("No matching files found in the specified SFTP directory.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def process_quote_report(quote_report_path):
+    """
+    Processes the Quotes_Report_.csv file to extract the Quote ID and 
+    filters for sites with multiple entries (duplicates on 'Site #').
+    """
+    try:
+        df_quotes = pd.read_csv(quote_report_path)
+    except FileNotFoundError:
+        print(f"Error: The file {quote_report_path} was not found.")
+        return
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return
+
+    # Clean column names
+    df_quotes.columns = df_quotes.columns.str.strip()
+
+    # Standardize 'Site #' column for grouping/comparison
+    if 'Site #' in df_quotes.columns:
+        # Standardize Site # (same logic from the original two-file code)
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+
+    # --- NEW REQUIREMENT: Extract QUOTE ID from 'Document' column ---
+    if 'Document' in df_quotes.columns:
+        try:
+            # Extract the part after the first underscore as the Quote ID
+            df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)[1].str.strip()
+        except KeyError:
+            print("Warning: Could not extract 'QT:Quote ID' from 'Document' column. Check file format.")
+            df_quotes['QT:Quote ID'] = None
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
+
+    # --- RE-INTRODUCING FILTERING/COMPARISON LOGIC ---
+    # The previous code output ALL rows. Now we only output rows where the 'Site #' 
+    # appears more than once, simulating the 'difference' or 'issue' report.
+    
+    # 1. Identify which 'Site #' values are duplicated (appear > 1 time)
+    duplicated_sites = df_quotes['Site #'].duplicated(keep=False) 
+    
+    # 2. Filter the DataFrame to only include rows with those duplicated Site #s
+    # This includes ALL rows for those sites (e.g., both lines for site 282)
+    df_output = df_quotes[duplicated_sites & df_quotes['QT:Quote ID'].notna()]
+
+    # Requirement 6: Reorder and rename columns for the new file
+    if not df_output.empty:
+        # Select the necessary columns from the single input file
+        df_output = df_output[[
+            'QT:Quote ID',
+            'Site #', # Keep Site # for context in the output
+            'Submittal Date',
+            'Document Type - RAN',
+            'Review History',
+            'Doc Review Status Text',
+            'Date Approved',
+            'Rejection Notes',
+            'Redline Notes'
+        ]].rename(columns={
+            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            'Site #': 'SITE_NUMBER',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
+            'Review History': 'QT_QB__REVIEW_HISTORY',
+            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'Date Approved': 'QT_QB__DATE_APPROVED',
+            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
+        })
+        
+        # Save the result
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file_name = f"QB_Quotes_Discrepancy_Report_{timestamp}.xlsx" # Better name for a filtered report
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Discrepancy report saved to: {output_path}")
+        print(f"Total Site #s with multiple entries: {df_output['SITE_NUMBER'].nunique()}")
+    else:
+        print("No Site #s with multiple entries (discrepancies) found in the report.")
+
+# Main script execution (remains the same)
+if __name__ == '__main__':
+    # Define file paths (these should be replaced with your actual paths)
+    quote_report_file = 'path/to/your/Quotes_Report_.csv'
+    
+    # --- SFTP Configuration ---
+    SFTP_HOST = 'your_sftp_host'
+    SFTP_PORT = 22 
+    SFTP_USERNAME = 'your_username'
+    SFTP_PASSWORD = 'your_password'
+    REMOTE_DIR = '/path/on/sftp/server/'
+    LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\'
+    FILE_PREFIX_TO_DOWNLOAD = 'Quotes_Report_' 
+
+    # 1. Download the latest Quotes_Report_.csv file
+    downloaded_path = download_file_from_sftp_to_network(
+        LOCAL_NETWORK_PATH, 
+        SFTP_HOST, 
+        SFTP_PORT, 
+        SFTP_USERNAME, 
+        SFTP_PASSWORD, 
+        REMOTE_DIR, 
+        FILE_PREFIX_TO_DOWNLOAD
+    )
+
+    # 2. Process the downloaded file
+    if downloaded_path:
+        process_quote_report(downloaded_path)
+    else:
+        print("Could not proceed with file processing as no file was downloaded.")
