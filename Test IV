@@ -5,9 +5,6 @@ from datetime import datetime
 import openpyxl
 import re 
 
-# ... (SFTP functions remain the same) ...
-# ... (download_file_from_sftp_to_network function remains the same) ...
-
 def get_latest_file(sftp, remote_file_path, file_prefix):
     """
     Get the latest file from the SFTP server based on the file prefix.
@@ -16,7 +13,7 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
     latest_file = None
     latest_timestamp = None
     for file in files:
-        # NOTE: Updated file prefix check to look for 'Quotes_Report_'
+        # Check for the correct prefix: 'Quotes_Report_'
         if file.startswith(file_prefix):
             try:
                 file_stat = sftp.stat(os.path.join(remote_file_path, file))
@@ -32,7 +29,7 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
 def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
     """
     Downloads a single file from an SFTP server to a specified network directory.
-    NOTE: The file_prefix for this function should be 'Quotes_Report_'.
+    The file_prefix for this function is expected to be 'Quotes_Report_'.
     """
     print("Starting SFTP file download...")
     ssh = None
@@ -71,9 +68,9 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
 
 def process_quote_report(quote_report_path):
     """
-    Processes the Quotes_Report_.csv file to extract the Quote ID and 
-    filters for sites with multiple entries (duplicates on 'Site #').
-    A temporary debug file is created to show all raw data for inspection.
+    Processes the Quotes_Report_.csv file to extract the Quote ID, standardizes
+    Site #, filters for sites with multiple entries, and creates both a debug 
+    file and the final discrepancy report.
     """
     print(f"\n--- Starting to process file: {quote_report_path} ---")
     
@@ -86,20 +83,21 @@ def process_quote_report(quote_report_path):
         print(f"Error reading file: {e}")
         return
 
-    # Clean column names
+    # Clean column names by stripping whitespace
     df_quotes.columns = df_quotes.columns.str.strip()
 
-    # Standardize 'Site #' column for grouping/comparison
+    # --- Data Preparation ---
+    # Standardize 'Site #' column for grouping/comparison (e.g., 282 -> 0282)
     if 'Site #' in df_quotes.columns:
         df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
     else:
         print("Error: The required 'Site #' column was not found in the report.")
         return
 
-    # --- Extract QUOTE ID from 'Document' column ---
+    # --- Extract QUOTE ID from 'Document' column (Text-to-Column Logic) ---
     if 'Document' in df_quotes.columns:
         try:
-            # Extract the part after the first underscore as the Quote ID.
+            # Splits the column by the first '_' and takes the second part
             df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)[1].str.strip()
         except KeyError:
             print("Warning: Could not extract 'QT:Quote ID' from 'Document' column. Check file format.")
@@ -116,7 +114,7 @@ def process_quote_report(quote_report_path):
     df_filtered = df_quotes[duplicated_sites & df_quotes['QT:Quote ID'].notna()]
 
     # ====================================================================
-    # === NEW: GENERATE DEBUG/COMPARISON FILE (All Columns) ===
+    # === GENERATE DEBUG/COMPARISON FILE (All Columns) ===
     # ====================================================================
     if not df_filtered.empty:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -128,7 +126,7 @@ def process_quote_report(quote_report_path):
         print(f"\n*** DEBUG FILE CREATED ***: All raw columns for duplicated sites saved to: {debug_output_path}")
 
     # ====================================================================
-    # === ORIGINAL FINAL OUTPUT FILE GENERATION ===
+    # === GENERATE FINAL OUTPUT REPORT ===
     # ====================================================================
 
     df_output = df_filtered.copy() # Use the filtered data for the final output
@@ -138,7 +136,7 @@ def process_quote_report(quote_report_path):
         # Select the necessary columns from the single input file
         df_output = df_output[[
             'QT:Quote ID',
-            'Site #', # Keep Site # for context in the output
+            'Site #', 
             'Submittal Date',
             'Document Type - RAN',
             'Review History',
@@ -170,9 +168,8 @@ def process_quote_report(quote_report_path):
 
 # Main script execution
 if __name__ == '__main__':
-    # ... (SFTP Configuration and execution remains the same) ...
-    
     # --- SFTP Configuration ---
+    # !!! IMPORTANT: REPLACE THESE PLACEHOLDERS WITH YOUR ACTUAL VALUES !!!
     SFTP_HOST = 'your_sftp_host'
     SFTP_PORT = 22 
     SFTP_USERNAME = 'your_username'
