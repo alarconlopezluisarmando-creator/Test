@@ -5,6 +5,7 @@ from datetime import datetime
 import openpyxl
 import re 
 
+# --- SFTP Functions remain the same (They handle the single CSV download) ---
 def get_latest_file(sftp, remote_file_path, file_prefix):
     """
     Get the latest file from the SFTP server based on the file prefix.
@@ -13,7 +14,6 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
     latest_file = None
     latest_timestamp = None
     for file in files:
-        # Check for the correct prefix: 'Quotes_Report_'
         if file.startswith(file_prefix):
             try:
                 file_stat = sftp.stat(os.path.join(remote_file_path, file))
@@ -29,7 +29,6 @@ def get_latest_file(sftp, remote_file_path, file_prefix):
 def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
     """
     Downloads a single file from an SFTP server to a specified network directory.
-    The file_prefix for this function is expected to be 'Quotes_Report_'.
     """
     print("Starting SFTP file download...")
     ssh = None
@@ -66,77 +65,104 @@ def download_file_from_sftp_to_network(output_network_path, host, port, username
         if ssh:
             ssh.close()
 
-def process_quote_report(quote_report_path):
+def process_and_compare_files(quote_report_path, quote_tracker_path):
     """
-    Processes the Quotes_Report_.csv file to extract the Quote ID, standardizes
-    Site #, filters for sites with multiple entries, and creates both a debug 
-    file and the final discrepancy report.
+    Reads the two files, extracts Quote ID from the report, and compares them 
+    on the 'Site #' key to find discrepancies.
     """
-    print(f"\n--- Starting to process file: {quote_report_path} ---")
+    print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
     
     try:
         df_quotes = pd.read_csv(quote_report_path)
-    except FileNotFoundError:
-        print(f"Error: The file {quote_report_path} was not found.")
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError as e:
+        print(f"Error: One of the files was not found. Details: {e}")
         return
     except Exception as e:
-        print(f"Error reading file: {e}")
+        print(f"Error reading files: {e}")
         return
 
-    # Clean column names by stripping whitespace
+    # Clean column names
     df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
 
-    # --- Data Preparation ---
-    # Standardize 'Site #' column for grouping/comparison (e.g., 282 -> 0282)
-    if 'Site #' in df_quotes.columns:
-        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-    else:
-        print("Error: The required 'Site #' column was not found in the report.")
-        return
-
-    # --- Extract QUOTE ID from 'Document' column (Text-to-Column Logic) ---
+    # --- NEW: Extract QT:Quote ID from 'Document' column (Quotes_Report_) ---
     if 'Document' in df_quotes.columns:
         try:
-            # Splits the column by the first '_' and takes the second part
-            df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)[1].str.strip()
+            # We now keep the Site # (first part) AND the Quote ID (second part)
+            split_df = df_quotes['Document'].astype(str).str.split('_', n=1, expand=True)
+            # The Quote ID is the second part (index 1)
+            df_quotes['QT:Quote ID'] = split_df[1].str.strip()
         except KeyError:
-            print("Warning: Could not extract 'QT:Quote ID' from 'Document' column. Check file format.")
+            print("Warning: Could not extract 'QT:Quote ID' from 'Document' column.")
             df_quotes['QT:Quote ID'] = None
     else:
         print("Error: The required 'Document' column was not found in the report.")
         return
 
-    # --- FILTERING LOGIC (Find sites with multiple entries) ---
-    # Identify which 'Site #' values are duplicated (appear > 1 time)
-    duplicated_sites = df_quotes['Site #'].duplicated(keep=False) 
+    # --- Data Standardization for Merge ---
+    # Standardize 'Site #' in the downloaded report
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the Quotes Report.")
+        return
     
-    # Filter the DataFrame to only include rows with those duplicated Site #s
-    df_filtered = df_quotes[duplicated_sites & df_quotes['QT:Quote ID'].notna()]
+    # Standardize 'Site #' in the local tracker
+    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
+    if 'Site #' in df_tracker.columns:
+        df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
+        return
 
+
+    # --- Merge (Comparison) ---
+    # Merge the two dataframes on the common "Site #" key using a left join.
+    merged_df = pd.merge(
+        df_quotes,
+        df_tracker,
+        on='Site #',
+        how='left',
+        suffixes=('_quotes', '_tracker')
+    )
+
+    # --- Comparison Logic ---
+    # Requirement 3: Concatenate key columns from Quotes_Report_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #', 'Document Type - RAN', 'Review History',
+        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate key columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'Site #', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    df_diff = merged_df[merged_df['Conca_quotes'] != merged_df['Conca_tracker']]
+
+    
     # ====================================================================
-    # === GENERATE DEBUG/COMPARISON FILE (All Columns) ===
+    # === OUTPUT: DEBUG/COMPARISON FILE (The one you asked for) ===
     # ====================================================================
-    if not df_filtered.empty:
+    if not df_diff.empty:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        debug_file_name = f"DEBUG_Comparison_Raw_Data_{timestamp}.xlsx"
+        debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
         debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name)
         
-        # Save ALL columns for the duplicated sites to the debug file
-        df_filtered.to_excel(debug_output_path, index=False)
-        print(f"\n*** DEBUG FILE CREATED ***: All raw columns for duplicated sites saved to: {debug_output_path}")
+        # Save ALL columns from the merged (differing) rows to the debug file
+        df_diff.to_excel(debug_output_path, index=False)
+        print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences (merged raw data) saved to: {debug_output_path}")
 
     # ====================================================================
-    # === GENERATE FINAL OUTPUT REPORT ===
+    # === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
     # ====================================================================
-
-    df_output = df_filtered.copy() # Use the filtered data for the final output
-
-    # Requirement 6: Reorder and rename columns for the new file
-    if not df_output.empty:
-        # Select the necessary columns from the single input file
-        df_output = df_output[[
+    if not df_diff.empty:
+        df_output = df_diff[[
+            # Use the newly extracted Quote ID from the Report file
             'QT:Quote ID',
-            'Site #', 
             'Submittal Date',
             'Document Type - RAN',
             'Review History',
@@ -146,7 +172,6 @@ def process_quote_report(quote_report_path):
             'Redline Notes'
         ]].rename(columns={
             'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
-            'Site #': 'SITE_NUMBER',
             'Submittal Date': 'QT_SUBMITTAL_DATE',
             'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
             'Review History': 'QT_QB__REVIEW_HISTORY',
@@ -156,20 +181,18 @@ def process_quote_report(quote_report_path):
             'Redline Notes': 'QT_QB_RED_LINE_NOTES'
         })
         
-        # Save the final, processed result
+        # Save the differences to a new Excel file with a timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file_name = f"QB_Quotes_Discrepancy_Report_{timestamp}.xlsx" 
+        output_file_name = f"QB_Quotes_Discrepancy_Report_{timestamp}.xlsx"
         output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
         df_output.to_excel(output_path, index=False)
-        print(f"Final Discrepancy report saved to: {output_path}")
-        print(f"Total Site #s with multiple entries: {df_output['SITE_NUMBER'].nunique()}")
+        print(f"Final Discrepancy Report saved to: {output_path}")
     else:
-        print("No Site #s with multiple entries (discrepancies) found in the report. Final file not created.")
+        print("No differences found between the two files. Final report not created.")
 
 # Main script execution
 if __name__ == '__main__':
     # --- SFTP Configuration ---
-    # !!! IMPORTANT: REPLACE THESE PLACEHOLDERS WITH YOUR ACTUAL VALUES !!!
     SFTP_HOST = 'your_sftp_host'
     SFTP_PORT = 22 
     SFTP_USERNAME = 'your_username'
@@ -177,6 +200,11 @@ if __name__ == '__main__':
     REMOTE_DIR = '/path/on/sftp/server/'
     LOCAL_NETWORK_PATH = 'C:\\Local\\Output\\Path\\'
     FILE_PREFIX_TO_DOWNLOAD = 'Quotes_Report_' 
+
+    # --- LOCAL FILE PATH ---
+    # !!! IMPORTANT: SET THE CORRECT LOCAL PATH FOR THE TRACKER FILE !!!
+    # This file must exist at this exact path for the comparison to work.
+    QUOTE_TRACKER_FILE_PATH = 'C:\\Local\\Path\\to\\Quote_Tracker_Data_.xlsx' 
 
     # 1. Download the latest Quotes_Report_.csv file
     downloaded_path = download_file_from_sftp_to_network(
@@ -189,8 +217,8 @@ if __name__ == '__main__':
         FILE_PREFIX_TO_DOWNLOAD
     )
 
-    # 2. Process the downloaded file
+    # 2. Process and compare the downloaded file with the local tracker file
     if downloaded_path:
-        process_quote_report(downloaded_path)
+        process_and_compare_files(downloaded_path, QUOTE_TRACKER_FILE_PATH)
     else:
         print("Could not proceed with file processing as no file was downloaded.")
