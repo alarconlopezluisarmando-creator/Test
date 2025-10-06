@@ -90,3 +90,9 @@ report.columns.name = 'Category'
 
 print("--- Final Macro/SC Site Count Report ---")
 print(report)
+
+
+Region/ Site Count	Samsung (SEA + VZ)										
+	CDU30 Count			uADPF Count			NSB			Total	SS Total %
+	Total	Macro	SC	Total	Macro	SC	Total	Macro	SC		
+Central Gulf Coast	4053			1118			814			5171	69%
