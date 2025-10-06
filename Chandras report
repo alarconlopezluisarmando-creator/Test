@@ -12,7 +12,7 @@ DB = 'RANCOMM'
 connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
 
-# Fetch the data
+# --- 2. Data Fetch ---
 query = """SELECT 
        [market_id]
       ,[NE_ID]
@@ -25,32 +25,68 @@ query = """SELECT
       ,[eNB_ID]
   FROM [RANCOMM].[dbo].[daily_sites_mapping]"""
 
-df = pd.read_sql(query, engine)
+try:
+    df = pd.read_sql(query, engine)
+    print(f"Successfully fetched {len(df)} records.")
+except Exception as e:
+    print(f"❌ Error connecting to database or fetching data: {e}")
+    # You'll see this error if the connection fails
+    exit()
 
-# Filter the data
-df = df[(df['ne_type'] == 'udu_cnf') | (df['ne_type'] == 'macro_indoor_dist')]
+# --- 3. Filtering and Categorization ---
 
-# Define the conditions for SC
+# Define the conditions for SC. I recommend using more specific terms like 'cran_mc'
+# or removing the generic '_ib' if it's causing misclassification of Macro sites.
+# I've used your last list, but be aware '_ib' might be too broad.
 sc_conditions = ['sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', '_ib']
 
-# Create a new column to categorize NE NAME
+# Normalize the 'NE NAME' column for consistent comparison
 df['NE NAME'] = df['NE NAME'].str.strip().str.lower()
-df['category'] = df['NE NAME'].apply(lambda x: 'SC' if any(cond in x for cond in sc_conditions) else 'Macro')
 
-# Group by region, ne_type, and category, then count NE_ID
-report_macro_udu = df[(df['category'] == 'Macro') & (df['ne_type'] == 'udu_cnf')].groupby('region')['NE_ID'].count()
-report_sc_udu = df[(df['category'] == 'SC') & (df['ne_type'] == 'udu_cnf')].groupby('region')['NE_ID'].count()
-report_macro_macro = df[(df['category'] == 'Macro') & (df['ne_type'] == 'macro_indoor_dist')].groupby('region')['NE_ID'].count()
-report_sc_macro = df[(df['category'] == 'SC') & (df['ne_type'] == 'macro_indoor_dist')].groupby('region')['NE_ID'].count()
+# Create the 'category' column (Macro/SC)
+def categorize_ne(ne_name):
+    """Assigns 'SC' if any condition is found, otherwise 'Macro'."""
+    return 'SC' if any(cond in ne_name for cond in sc_conditions) else 'Macro'
 
-# Create total columns
-report = pd.DataFrame({
-    ('CDU30 Count', 'Total'): report_macro_udu.add(report_sc_udu, fill_value=0),
-    ('CDU30 Count', 'Macro'): report_macro_udu,
-    ('CDU30 Count', 'SC'): report_sc_udu,
-    ('uADPF Count', 'Total'): report_macro_macro.add(report_sc_macro, fill_value=0),
-    ('uADPF Count', 'Macro'): report_macro_macro,
-    ('uADPF Count', 'SC'): report_sc_macro,
-})
+df['category'] = df['NE NAME'].apply(categorize_ne)
 
+# -----------------------------------------------------------------------------
+# 🚨 IMPORTANT DIAGNOSTIC CHECK 🚨
+# This checks why your count dropped from 800+ to <100.
+# Run this *before* the ne_type filter to see which ne_types your IB sites have.
+# -----------------------------------------------------------------------------
+print("\n--- Diagnostic Check on Initial Data (Based on Name Category) ---")
+total_sc_sites = len(df[df['category'] == 'SC'])
+print(f"Total sites categorized as 'SC' (by name): {total_sc_sites}")
+print("Distribution of NE Type for ALL 'SC' sites:")
+print(df[df['category'] == 'SC']['ne_type'].value_counts().head(5))
+print("------------------------------------------------------------------\n")
+
+
+# Apply the ne_type filter. 
+# 🛑 If your 800+ sites have a different ne_type (e.g., 'crane_v1'), 
+# they will be filtered out here.
+df = df[(df['ne_type'] == 'udu_cnf') | (df['ne_type'] == 'macro_indoor_dist')]
+
+# -----------------------------------------------------------------------------
+
+# --- 4. Final Report Aggregation (Simplified and Corrected) ---
+# This uses the efficient groupby + unstack method to get a Macro/SC column report.
+
+# Group by region and the 'category', count the NE_ID, and pivot 'category' into columns
+report = df.groupby(['region', 'category'])['NE_ID'].count().unstack(fill_value=0)
+
+# Optional: Ensure the columns are in the desired order
+if 'Macro' in report.columns and 'SC' in report.columns:
+    report = report[['Macro', 'SC']]
+elif 'Macro' in report.columns:
+    report = report[['Macro']]
+elif 'SC' in report.columns:
+    report = report[['SC']]
+
+# Rename the index for clarity
+report.index.name = 'Region'
+report.columns.name = 'Category'
+
+print("--- Final Macro/SC Site Count Report ---")
 print(report)
