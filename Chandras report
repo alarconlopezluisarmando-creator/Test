@@ -1,0 +1,56 @@
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+
+server = '105.52.12.164,1433'
+server_tcp = 'tcp:' + server
+USERNAME = 'rfuseradmin'
+PSSWD = 'Newtisgreat!'
+DB = 'RANCOMM'
+
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+
+engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+
+# Fetch the data
+query = """SELECT 
+       [market_id]
+      ,[NE_ID]
+      ,[NE_PREFIX]
+      ,[ne_type]
+      ,[EMS NAME]
+      ,[NE NAME]
+      ,[NE SOFTWARE]
+      ,[region]
+      ,[eNB_ID]
+  FROM [RANCOMM].[dbo].[daily_sites_mapping]"""
+
+df = pd.read_sql(query, engine)
+
+# Filter the data
+df = df[(df['ne_type'] == 'udu_cnf') | (df['ne_type'] == 'macro_indoor_dist')]
+
+# Define the conditions for SC
+sc_conditions = ['sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_mc', 'cran_das']
+
+# Create a new column to categorize NE NAME
+df['NE NAME'] = df['NE NAME'].str.strip().str.lower()
+df['category'] = df['NE NAME'].apply(lambda x: 'SC' if any(cond in x for cond in sc_conditions) else 'Macro')
+
+# Group by region, ne_type, and category, then count NE_ID
+report_macro_udu = df[(df['category'] == 'Macro') & (df['ne_type'] == 'udu_cnf')].groupby('region')['NE_ID'].count()
+report_sc_udu = df[(df['category'] == 'SC') & (df['ne_type'] == 'udu_cnf')].groupby('region')['NE_ID'].count()
+report_macro_macro = df[(df['category'] == 'Macro') & (df['ne_type'] == 'macro_indoor_dist')].groupby('region')['NE_ID'].count()
+report_sc_macro = df[(df['category'] == 'SC') & (df['ne_type'] == 'macro_indoor_dist')].groupby('region')['NE_ID'].count()
+
+# Create total columns
+report = pd.DataFrame({
+    ('CDU30 Count', 'Total'): report_macro_udu.add(report_sc_udu, fill_value=0),
+    ('CDU30 Count', 'Macro'): report_macro_udu,
+    ('CDU30 Count', 'SC'): report_sc_udu,
+    ('uADPF Count', 'Total'): report_macro_macro.add(report_sc_macro, fill_value=0),
+    ('uADPF Count', 'Macro'): report_macro_macro,
+    ('uADPF Count', 'SC'): report_sc_macro,
+})
+
+print(report)
