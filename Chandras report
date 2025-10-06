@@ -8,6 +8,18 @@ USERNAME = 'rfuseradmin'
 PSSWD = 'Newtisgreat!'
 DB = 'RANCOMM'
 
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+import numpy as np
+
+# --- 1. Database Configuration ---
+server = '105.52.12.164,1433'
+server_tcp = 'tcp:' + server
+USERNAME = 'rfuseradmin'
+PSSWD = 'Newtisgreat!'
+DB = 'RANCOMM'
+
 # Configure the connection string and engine
 connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
@@ -27,72 +39,68 @@ query = """SELECT
 
 try:
     df = pd.read_sql(query, engine)
-    print(f"Successfully fetched {len(df)} records.")
+    print(f"Successfully fetched {len(df)} records. 💾")
 except Exception as e:
     print(f"❌ Error connecting to database or fetching data: {e}")
-    # You'll see this error if the connection fails
     exit()
 
 # --- 3. Filtering and Categorization ---
 
-# Define the conditions for SC. I recommend using more specific terms like 'cran_mc'
-# or removing the generic '_ib' if it's causing misclassification of Macro sites.
-# I've used your last list, but be aware '_ib' might be too broad.
+# Define the ne_type values corresponding to your three count groups
+CDU30_TYPE = 'udu_cnf'
+UADPF_TYPE = 'macro_indoor_dist'
+# 🚨 ACTION REQUIRED: Replace 'nsb_type' with the actual ne_type for NSB sites
+NSB_TYPE = 'nsb_type' 
+
+# Filter for the relevant ne_types
+df = df[(df['ne_type'] == CDU30_TYPE) | (df['ne_type'] == UADPF_TYPE) | (df['ne_type'] == NSB_TYPE)]
+
+# Define the conditions for SC. (Using your last provided list)
 sc_conditions = ['sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', '_ib']
 
-# Normalize the 'NE NAME' column for consistent comparison
+# Create a new column to categorize NE NAME
 df['NE NAME'] = df['NE NAME'].str.strip().str.lower()
+df['category'] = df['NE NAME'].apply(lambda x: 'SC' if any(cond in x for cond in sc_conditions) else 'Macro')
 
-# Create the 'category' column (Macro/SC)
-def categorize_ne(ne_name):
-    """Assigns 'SC' if any condition is found, otherwise 'Macro'."""
-    return 'SC' if any(cond in ne_name for cond in sc_conditions) else 'Macro'
+# --- 4. Final Report Aggregation and Formatting ---
 
-df['category'] = df['NE NAME'].apply(categorize_ne)
+# Map the raw ne_type values to the desired base column names
+ne_type_map = {
+    CDU30_TYPE: 'CDU30',
+    UADPF_TYPE: 'uADPF',
+    NSB_TYPE: 'NSB'
+}
 
-# -----------------------------------------------------------------------------
-# 🚨 IMPORTANT DIAGNOSTIC CHECK 🚨
-# This checks why your count dropped from 800+ to <100.
-# Run this *before* the ne_type filter to see which ne_types your IB sites have.
-# -----------------------------------------------------------------------------
-print("\n--- Diagnostic Check on Initial Data (Based on Name Category) ---")
-total_sc_sites = len(df[df['category'] == 'SC'])
-print(f"Total sites categorized as 'SC' (by name): {total_sc_sites}")
-print("Distribution of NE Type for ALL 'SC' sites:")
-print(df[df['category'] == 'SC']['ne_type'].value_counts().head(5))
-print("------------------------------------------------------------------\n")
+# Create a temporary column with the desired header name
+df['technology'] = df['ne_type'].map(ne_type_map)
 
+# Group by region, the 'technology', and the 'category' (Macro/SC)
+report_series = df.groupby(['region', 'technology', 'category'])['NE_ID'].count()
 
-# Apply the ne_type filter. 
-# 🛑 If your 800+ sites have a different ne_type (e.g., 'crane_v1'), 
-# they will be filtered out here.
-df = df[(df['ne_type'] == 'udu_cnf') | (df['ne_type'] == 'macro_indoor_dist')]
+# Unstack all levels except 'region' to get a MultiIndex column structure
+report = report_series.unstack(level=['technology', 'category']).fillna(0).astype(int)
 
-# -----------------------------------------------------------------------------
+# --- 5. Flatten the Column Headers (The Key Change) ---
 
-# --- 4. Final Report Aggregation (Simplified and Corrected) ---
-# This uses the efficient groupby + unstack method to get a Macro/SC column report.
+# Flatten the MultiIndex columns using a list comprehension
+# This converts ('CDU30', 'Macro') into 'CDU30_Macro'
+report.columns = [f'{tech}_{cat}' for tech, cat in report.columns]
 
-# Group by region and the 'category', count the NE_ID, and pivot 'category' into columns
-report = df.groupby(['region', 'category'])['NE_ID'].count().unstack(fill_value=0)
+# Define the explicit order for the flat columns
+ordered_cols_flat = [
+    'CDU30_Macro', 'CDU30_SC', 
+    'uADPF_Macro', 'uADPF_SC', 
+    'NSB_Macro', 'NSB_SC'
+]
 
-# Optional: Ensure the columns are in the desired order
-if 'Macro' in report.columns and 'SC' in report.columns:
-    report = report[['Macro', 'SC']]
-elif 'Macro' in report.columns:
-    report = report[['Macro']]
-elif 'SC' in report.columns:
-    report = report[['SC']]
+# Reorder the final report columns, filtering for existing ones
+final_cols = [col for col in ordered_cols_flat if col in report.columns]
+report = report[final_cols]
 
-# Rename the index for clarity
-report.index.name = 'Region'
-report.columns.name = 'Category'
+# Clean up index name
+report.index.name = 'Region / Site Count'
 
-print("--- Final Macro/SC Site Count Report ---")
+print("\n" + "="*80)
+print("     Samsung Site Count Report with FLAT Column Headers")
+print("="*80)
 print(report)
-
-
-Region/ Site Count	Samsung (SEA + VZ)										
-	CDU30 Count			uADPF Count			NSB			Total	SS Total %
-	Total	Macro	SC	Total	Macro	SC	Total	Macro	SC		
-Central Gulf Coast	4053			1118			814			5171	69%
