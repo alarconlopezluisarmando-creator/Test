@@ -1,0 +1,70 @@
+MemoryError: Unable to allocate 5.60 GiB for an array with shape (751202049,) and data type int64
+
+# Fetch data from daily_sites_mapping table
+query = """SELECT 
+       [market_id]
+      ,[NE_ID]
+      ,[NE_PREFIX]
+      ,[ne_type]
+      ,[EMS NAME]
+      ,[NE NAME]
+      ,[NE SOFTWARE]
+      ,[region]
+      ,[eNB_ID]
+  FROM [RANCOMM].[dbo].[daily_sites_mapping]"""
+
+try:
+    df = pd.read_sql(query, engine)
+    print(f"Successfully fetched {len(df)} records from daily_sites_mapping. ")
+except Exception as e:
+    print(f"Error connecting to database or fetching data: {e}")
+    exit()
+
+# Fetch data from OVData table
+query_ov = """SELECT 
+       [P:Related ENB IDs]
+      ,[P:Project Site Type]
+  FROM [RANCOMM].[dbo].[OVData]"""
+
+try:
+    df_ov = pd.read_sql(query_ov, engine)
+    print(f"Successfully fetched {len(df_ov)} records from OVData. ")
+except Exception as e:
+    print(f"Error connecting to database or fetching data: {e}")
+    exit()
+
+# Define the ne_type values corresponding to your three count groups
+CDU30_TYPE = 'macro_indoor_dist'
+UADPF_TYPE = 'udu_cnf'
+NSB_TYPE = 'nsb_type' 
+
+# Filter for the relevant ne_types
+df = df[(df['ne_type'] == CDU30_TYPE) | (df['ne_type'] == UADPF_TYPE) | (df['ne_type'] == NSB_TYPE)]
+
+# Define the expanded SC conditions (using "contains" logic)
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+
+# Create a new column to categorize NE NAME
+df['NE NAME'] = df['NE NAME'].str.strip().str.lower()
+df['category'] = df['NE NAME'].apply(lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro')
+
+# Extract S// ID from [P:Related ENB IDs]
+df_ov['S// ID'] = df_ov['P:Related ENB IDs'].str.extract(r'\((.*?)\)')
+
+# Convert to Dask DataFrames
+ddf = dd.from_pandas(df, npartitions=10)
+ddf_ov = dd.from_pandas(df_ov[['S// ID', 'P:Project Site Type']], npartitions=10)
+
+# Create Custom LTE column
+ddf['Custom LTE'] = ddf.apply(lambda row: str(row['market_id'])[:2 if row['market_id'] < 100 else 3] + str(row['NE_ID'])[-3:], axis=1, meta=('Custom LTE', 'object'))
+ddf['Custom LTE'] = ddf['Custom LTE'].mask(ddf['ne_type'] != UADPF_TYPE)
+
+# Merge the Dask DataFrames
+merged_ddf = dd.merge(ddf, ddf_ov, left_on='Custom LTE', right_on='S// ID', how='left')
+
+# Convert the merged Dask DataFrame back to pandas and save to CSV
+merged_df = merged_ddf.compute()
+merged_df.to_csv(r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv', index=False)
