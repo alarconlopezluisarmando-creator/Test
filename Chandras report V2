@@ -127,7 +127,7 @@ try:
         )
         
         # 3. MAP THE NUMERIC ID TO DESCRIPTIVE TEXT
-        chunk_df['Project_Description_Value'] = chunk_df['Project_Type_ID'].map(PROJECT_TYPE_MAPPER).fillna('Unknown/N/A')
+        chunk_df['Project Site Type'] = chunk_df['Project_Type_ID'].map(PROJECT_TYPE_MAPPER).fillna('Unknown/N/A')
         
         # Drop the intermediate ID column
         chunk_df.drop(columns=['Project_Type_ID'], inplace=True)
@@ -143,10 +143,18 @@ try:
         
         # --- Write Chunk to CSV ---
         
-        # Define the explicit order for the output CSV columns
+        # Define the EXPLICIT list of columns for the output CSV, including all requested IDs
         output_columns = [
-            'region', 'NE_ID', 'ne_type', 'NE NAME', 'market_id', 
-            'Custom LTE', 'S// ID', 'P_ENB_ID', 'Project_Description_Value', 'category' 
+            'region',
+            'NE_ID',
+            'market_id', 
+            'Custom LTE', 
+            'S// ID', 
+            'P_ENB_ID', 
+            'ne_type',
+            'NE NAME',
+            'category', # Keep category for context, even if not explicitly listed
+            'Project Site Type' # The newly derived value
         ]
         
         # Write header only for the first chunk
