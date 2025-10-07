@@ -7,22 +7,30 @@ import re
 
 # --- 0. Configuration Variables ---
 # NOTE: Your connection details must be defined here.
+# Assuming you have defined these variables elsewhere, like:
 server = '105.52.12.164,1433'
 USERNAME = 'rfuseradmin'
 PSSWD = 'Newtisgreat!'
 DB = 'RANCOMM'
 
+# Define the ne_type values and their correct report names
+CDU30_TYPE = 'macro_indoor_dist'
+UADPF_TYPE = 'udu_cnf'
+NSB_TYPE = 'nsb_type' 
+NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+
 # Define the file path for the output
-OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\final_ovdata_output.csv'
+OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
 CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
 
-# --- MAPPING DICTIONARY (REQUIRED TO CONVERT ID TO NAME) ---
+# --- MAPPING DICTIONARY (DEFINE YOUR REAL VALUES HERE) ---
+# NOTE: If you are seeing many "Unknown/N/A", you MUST ensure these IDs are correct!
 PROJECT_TYPE_MAPPER = {
     1: 'MACRO',
     2: 'Small Cell',
     3: 'In Building',
     4: 'DAS',
-    # Ensure all possible IDs from OVData are mapped here
+    # Add other mappings as necessary
 }
 # ------------------------------------------------------------------
 
@@ -37,19 +45,8 @@ engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fas
 # 2. SQL QUERIES 
 # --------------------------------------------------------------------------
 
-# 2a. Query for the new MAIN TABLE (OVData)
-# This will be the LEFT side of the merge.
-OV_MAIN_QUERY = """
-SELECT 
-    [P_ENB_ID],             
-    [P:Project Site Type]
-FROM [RANCOMM].[dbo].[OVData]
-"""
-
-# 2b. Query for the new LOOKUP TABLE (daily_sites_mapping) 
-# This will be the RIGHT side of the merge.
-# We fetch the fields needed to construct the merge key and the output columns.
-LOOKUP_MAP_QUERY = """
+# 2a. Query for the main site mapping data (M)
+MAIN_DATA_QUERY = f"""
 SELECT
     M.[market_id],
     M.[NE_ID],
@@ -57,11 +54,23 @@ SELECT
     M.[NE NAME],
     M.[region]
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
+WHERE 
+    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
 """
+
+# 2b. Query for the OVData LOOKUP TABLE 
+OV_LOOKUP_QUERY = """
+SELECT 
+    [P_ENB_ID],             
+    [P:Project Site Type]
+FROM [RANCOMM].[dbo].[OVData]
+"""
+
 # --------------------------------------------------------------------------
 # 3. Memory-Efficient Processing
 # --------------------------------------------------------------------------
 
+# 💡 FIX: Delete the existing output file to prevent appending old data
 if os.path.exists(OUTPUT_FILE):
     os.remove(OUTPUT_FILE)
     print(f"Removed existing file: {OUTPUT_FILE}")
@@ -73,87 +82,89 @@ sc_conditions = [
 ]
 
 print(f"Starting memory-efficient process. Output: {OUTPUT_FILE}")
-print(f"1. Fetching smaller daily_sites_mapping lookup table...")
+print(f"1. Fetching small OVData lookup table...")
 
-# Load the daily_sites_mapping lookup table ONCE (Now the RIGHT table)
+# Load the small OVData lookup table ONCE
 try:
-    df_lookup = pd.read_sql(LOOKUP_MAP_QUERY, engine)
-    print(f"   Successfully loaded {len(df_lookup)} records for lookup. ✅")
+    df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
+    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup.")
     
-    # 1. Prepare key for lookup table (RIGHT)
-    market_id_str = df_lookup['market_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-    ne_id_str = df_lookup['NE_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-    df_lookup['Custom LTE'] = market_id_str + ne_id_str.str.slice(-3)
+    # FIX 1: Rename the ID column for clarity
+    df_ov_lookup.rename(columns={'P:Project Site Type': 'Project_Type_ID'}, inplace=True)
     
-    # 2. CRITICAL FIX FOR DUPLICATES: De-duplicate the lookup table
-    # This prevents the 1:many join that caused duplicates. Keep the first entry.
-    initial_lookup_count = len(df_lookup)
-    df_lookup.drop_duplicates(subset=['Custom LTE'], keep='first', inplace=True)
-    print(f"   Removed {initial_lookup_count - len(df_lookup)} duplicate entries from lookup table. ✅")
+    # FIX 2 (CRITICAL): Aggressive cleaning and casting for the merge key
+    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+    
+    # 💡 FIX FOR DUPLICATES: Keep only the first unique entry for each P_ENB_ID
+    initial_lookup_count = len(df_ov_lookup)
+    df_ov_lookup.drop_duplicates(subset=['P_ENB_ID'], keep='first', inplace=True)
+    print(f"   Removed {initial_lookup_count - len(df_ov_lookup)} duplicate entries from lookup table. ✅")
 
 except Exception as e:
-    print(f"FATAL ERROR: Could not load daily_sites_mapping lookup table: {e}")
+    print(f"FATAL ERROR: Could not load OVData lookup table. Verify column name [P_ENB_ID] and connection: {e}")
     exit()
 
 
-print(f"2. Processing main OVData in chunks of {CHUNK_SIZE} rows...")
+print(f"2. Processing main sites data in chunks of {CHUNK_SIZE} rows...")
 
 try:
-    for chunk_df in pd.read_sql_query(OV_MAIN_QUERY, engine, chunksize=CHUNK_SIZE):
+    for chunk_df in pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE):
         
         # --- Python Logic for Key Creation and Merge ---
         
-        # 1. CRITICAL CLEANING: Prepare key for main OVData table (LEFT)
-        # Apply the same cleaning to the merge key on the left side
-        chunk_df['P_ENB_ID_Clean'] = chunk_df['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        # 1. CRITICAL CLEANING: Prepare components for the Custom LTE key
+        market_id_str = chunk_df['market_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        ne_id_str = chunk_df['NE_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
-        # 2. PERFORM THE LEFT MERGE
-        # Use a LEFT join to keep ALL rows from OVData (the left side)
+        # Create the Custom LTE key
+        chunk_df['Custom LTE'] = market_id_str + ne_id_str.str.slice(-3)
+        
+        # 2. PERFORM THE SINGLE-KEY MERGE 
         chunk_df = pd.merge(
             chunk_df, 
-            df_lookup, 
-            left_on='P_ENB_ID_Clean', # OVData key
-            right_on='Custom LTE',    # daily_sites_mapping key
-            how='left'                # Keep all rows from OVData
+            df_ov_lookup, 
+            left_on='Custom LTE',  # Main data key
+            right_on='P_ENB_ID',   # Lookup data key
+            how='left'
         )
         
         # 3. MAP THE NUMERIC ID TO DESCRIPTIVE TEXT
         
-        # Rename the original 'P:Project Site Type' to the final column name
-        chunk_df.rename(columns={'P:Project Site Type': 'Project_Type_ID'}, inplace=True)
-        
-        # Convert the numeric ID to descriptive text using the mapper
-        chunk_df['Project Site Type'] = chunk_df['Project_Type_ID'].map(PROJECT_TYPE_MAPPER).fillna('UNMAPPED ID')
-        
-        # 4. Apply Categorization to the merged data (will be NaN if no match)
-        # Note: We must convert the column to string first to handle NaN/nulls introduced by the merge
-        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
-        
-        # Use np.where to handle the NaN values introduced by the merge
-        chunk_df['category'] = np.where(
-            chunk_df['NE NAME'] == 'nan', # If the merge failed, NE NAME will be 'nan' (string) or NaN (float)
-            '',                          # Set category to blank/empty string for failed merges
-            chunk_df['NE NAME'].apply(
-                lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
-            )
+        # NOTE: Apply mapping ONLY to non-null numeric values
+        # This prevents converting a failed merge (NaN) into 'Unknown/N/A' incorrectly.
+        chunk_df['Project Site Type'] = chunk_df['Project_Type_ID'].apply(
+            lambda x: PROJECT_TYPE_MAPPER.get(x, 'Unknown/N/A') if pd.notna(x) else x
         )
         
-        # 5. Clean up intermediate/temporary columns
-        chunk_df.drop(columns=['P_ENB_ID_Clean', 'Project_Type_ID'], errors='ignore', inplace=True)
+        # 💡 FINAL FIX FOR UNKNOWN/N/A: Set any remaining NaN merge failures to a specific status
+        chunk_df['Project Site Type'] = chunk_df['Project Site Type'].fillna('Merge Key Mismatch')
+
+        # Drop the intermediate ID column
+        chunk_df.drop(columns=['Project_Type_ID'], inplace=True)
+        
+        # 4. Categorization (Macro/SC)
+        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
+        chunk_df['category'] = chunk_df['NE NAME'].apply(
+            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
+        )
+        
+        # 5. Add the S// ID
+        chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
         # --- Write Chunk to CSV ---
         
-        # Define the EXPLICIT list of columns for the output CSV, ensuring order
+        # Define the EXPLICIT list of columns for the output CSV, including all requested IDs
         output_columns = [
             'region',
             'NE_ID',
             'market_id', 
-            'Custom LTE',       # The key from the right table
-            'P_ENB_ID',         # The original key from OVData
+            'Custom LTE', 
+            'S// ID', 
+            'P_ENB_ID', 
             'ne_type',
             'NE NAME',
             'category', 
-            'Project Site Type' # The derived value
+            'Project Site Type' 
         ]
         
         # Write header only for the first chunk
@@ -161,9 +172,7 @@ try:
             OUTPUT_FILE, 
             mode='a', 
             header=not header_written, 
-            index=False,
-            # Force missing values to be empty strings (blank) as requested
-            na_rep='' 
+            index=False
         )
         
         if not header_written:
