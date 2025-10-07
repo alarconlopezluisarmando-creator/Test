@@ -22,19 +22,16 @@ CHUNK_SIZE = 50000
 MASTER_SITELIST_PATH = r'\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx' 
 
 # ------------------------------------------------------------------
-# 🛠️ NEW FUNCTION: Aggressive ID Normalization
+# 🛠️ NEW FUNCTION: Aggressive ID Normalization (Unchanged)
 def normalize_id(series):
     """Converts ID series to clean, stripped, integer-based strings."""
-    # Convert to string, strip whitespace
     s = series.astype(str).str.strip()
-    # Remove floating point suffix (.0) if present
     s = s.str.replace(r'\.0$', '', regex=True)
-    # Remove any non-alphanumeric characters (if necessary for key consistency)
     s = s.str.replace(r'[^\w]', '', regex=True)
     return s
 
 # ------------------------------------------------------------------
-# --- 1. Database Connection and Query Setup ---
+# --- 1. Database Connection and Query Setup (Unchanged) ---
 try:
     server_tcp = 'tcp:' + server 
     connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
@@ -83,7 +80,7 @@ processed_chunks = []
 
 print(f"Starting processing in chunks of {CHUNK_SIZE} rows...")
 
-# --- Load Lookup Tables with Aggressive Normalization ---
+# --- Load Lookup Tables with Aggressive Normalization (Unchanged) ---
 try:
     # 1. OV Data Lookup
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
@@ -97,7 +94,6 @@ try:
 
     # 3. MASTER SITELIST Lookup
     df_master = pd.read_excel(MASTER_SITELIST_PATH, engine='openpyxl')
-    # Use iloc[:, 0] to select the first column (Column A) regardless of its header name
     df_master_ids = normalize_id(df_master.iloc[:, 0]) 
     master_id_set = set(df_master_ids.unique())
     
@@ -114,55 +110,57 @@ try:
     for i, chunk_df in enumerate(pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE)):
         print(f"   Processing chunk {i+1}...")
         
-        # 🛑 NEW FILTERING STEP 🛑
+        # 1. Filter out 'GROW_' sites
         initial_rows = len(chunk_df)
         chunk_df = chunk_df[~chunk_df['NE NAME'].astype(str).str.upper().str.contains('GROW_', na=False)].copy()
         rows_removed = initial_rows - len(chunk_df)
         if rows_removed > 0:
             print(f"      Removed {rows_removed} rows containing 'GROW_' in NE NAME.")
         
-        # 1. Initial NE_ID cleaning for merges/lookups
+        # 2. Initial NE_ID cleaning for lookups
         chunk_df['NE_ID_Clean'] = normalize_id(chunk_df['NE_ID'])
         
-        # 2. Key Creation (Custom LTE)
+        # 3. Key Creation and OVData MERGE (Unchanged)
         market_id_str = normalize_id(chunk_df['market_id'])
         chunk_df['Custom LTE'] = market_id_str + chunk_df['NE_ID_Clean'].str.slice(-3)
-        # OV Data relies on this Custom LTE key, no need to clean it further
         
-        # 3. PERFORM THE OVData MERGE 
         chunk_df = pd.merge(chunk_df, df_ov_lookup, left_on='Custom LTE', right_on='P_ENB_ID', how='left')
         chunk_df['Project Site Type'] = chunk_df['P:Project Site Type'].fillna('Merge Key Mismatch')
         chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
         
-        # 4. SIMPLIFIED CONDITIONAL NE_TYPE UPDATE
-        # Base condition: Only consider sites that are originally CDU30_TYPE
+        # 4. CONDITIONAL NE_TYPE UPDATE (NSB Classification)
         cdu30_base_condition = (chunk_df['ne_type'] == CDU30_TYPE)
-        
-        # Condition for NSB: NOT in VZW CIQ AND NOT in Master Site List
         cond_not_vzw = ~chunk_df['NE_ID_Clean'].isin(vzw_id_set)
         cond_not_master = ~chunk_df['NE_ID_Clean'].isin(master_id_set)
         
         # The rule: NSB if CDU30 AND (NOT VZW) AND (NOT Master)
         nsb_condition = cdu30_base_condition & cond_not_vzw & cond_not_master
         
+        # Apply NSB classification
         chunk_df.loc[nsb_condition, 'ne_type'] = NSB_TYPE
+
+        # 🛑 5. REGIONAL EXCLUSION RULE (The new update) 🛑
+        # Identify sites in NE or UNY that were just classified as NSB
+        revert_condition = (chunk_df['ne_type'] == NSB_TYPE) & \
+                           (chunk_df['region'].astype(str).str.upper().isin(['NE', 'UNY']))
+        
+        # Revert them back to MACRO_INDOOR_DIST
+        chunk_df.loc[revert_condition, 'ne_type'] = CDU30_TYPE
         
         chunk_df.drop(columns=['NE_ID_Clean'], inplace=True) # Drop temporary column
 
-        # 5. Categorization (Macro/SC)
+        # 6. Categorization and Final Columns (Unchanged)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
         chunk_df['category'] = chunk_df['NE NAME'].apply(
             lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
         )
         
-        # 6. Add the S// ID
         chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
         output_columns = ['region', 'NE_ID', 'market_id', 'Custom LTE', 'S// ID', 'ne_type', 'NE NAME', 'category', 'Project Site Type']
         processed_chunks.append(chunk_df[output_columns].copy())
 
-    # --- Summary Creation and Excel Export ---
-
+    # --- Summary Creation and Excel Export (Unchanged) ---
     df_processed = pd.concat(processed_chunks, ignore_index=True)
     
     # Global Deduping
