@@ -1,41 +1,6 @@
-import pandas as pd
-import pyodbc
-from sqlalchemy import create_engine
-import numpy as np
-
-# --- 0. Configuration Variables ---
-# Assume connection variables (server, USERNAME, PSSWD, DB, etc.) are defined
-CDU30_TYPE = 'macro_indoor_dist'
-UADPF_TYPE = 'udu_cnf'
-NSB_TYPE = 'nsb_type' 
-
-# Define the explicit ne_type values to be included
-NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
-
-# Define the file path for the output
-OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
-
-# --- 1. Database Connection and Query ---
-
-# Configure the connection string and engine
-# Assuming server, server_tcp, USERNAME, PSSWD, DB are defined
-connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
-engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
-
-# --------------------------------------------------------------------------
-# 💡 MOST SIMPLE AND MEMORY-EFFICIENT APPROACH: MERGE IN SQL
-# --------------------------------------------------------------------------
-
-# 1. Define the SQL Query with the JOIN, Custom LTE calculation, and initial filtering
-# NOTE: The Custom LTE calculation logic is complex to translate to SQL without 
-# full context on the 'market_id' integer length. We'll simplify the SQL JOIN 
-# based on the assumption that you can calculate or pre-process 'S// ID' easily.
-
-# Assuming the 'S// ID' in OVData is directly usable for joining:
-# If you can't join directly, you must calculate the 'Custom LTE' key in SQL 
-# or use the chunking approach below for both tables.
-
-SQL_QUERY = f"""
+Starting memory-efficient fetch and processing, saving to C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv...
+An error occurred during chunk processing: (pyodbc.ProgrammingError) ('42000', '[42000] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Error converting data type varchar to float. (8114) (SQLExecDirectW)')
+[SQL: 
 SELECT
     M.*,
     OV.[P:Related ENB IDs],
@@ -51,51 +16,5 @@ LEFT JOIN [RANCOMM].[dbo].[OVData] OV
     -- If Custom LTE is the key, you must calculate the P:Related ENB IDs key in SQL first.
 
 WHERE 
-    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
-"""
-
-# --------------------------------------------------------------------------
-# 2. Use Chunking to Read and Process the Data
-# This completely bypasses the MemoryError by reading and writing line-by-line.
-# --------------------------------------------------------------------------
-
-CHUNK_SIZE = 50000  # Adjust based on your available RAM
-
-# Open the output CSV file and write the header once
-header_written = False
-
-print(f"Starting memory-efficient fetch and processing, saving to {OUTPUT_FILE}...")
-
-try:
-    # Use read_sql_query with chunksize to read the large result set
-    for chunk_df in pd.read_sql_query(SQL_QUERY, engine, chunksize=CHUNK_SIZE):
-        
-        # --- Apply Python Logic to the Chunk (Filtering and Categorization) ---
-        
-        # 1. Strip and lowercase NE NAME
-        chunk_df['NE NAME'] = chunk_df['NE NAME'].str.strip().str.lower()
-
-        # 2. Define the expanded SC conditions (Must be redefined here or kept in scope)
-        sc_conditions = ['sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 'ib', 'das', 'sc', 'odas']
-        
-        # 3. Apply categorization (Macro/SC)
-        # Note: The original code used 'x.startswith('4')' which is kept here
-        chunk_df['category'] = chunk_df['NE NAME'].apply(
-            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
-        )
-        
-        # --- Write Chunk to CSV ---
-        
-        chunk_df.to_csv(
-            OUTPUT_FILE, 
-            mode='a', # Append mode
-            header=not header_written, # Write header only for the first chunk
-            index=False
-        )
-        header_written = True
-        
-    print("\n✅ Data processing complete. All chunks saved to CSV.")
-
-except Exception as e:
-    print(f"An error occurred during chunk processing: {e}")
-
+    M.ne_type IN ('macro_indoor_dist', 'udu_cnf', 'nsb_type')
+]
