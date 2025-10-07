@@ -1,32 +1,118 @@
-Starting memory-efficient fetch and processing, saving to C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv...
-Processing database query in chunks of 50000 rows.
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+import numpy as np
+import os
 
-FATAL ERROR during chunk processing: (pyodbc.ProgrammingError) ('42000', '[42000] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Error converting data type varchar to float. (8114) (SQLExecDirectW)')
-[SQL: 
+# --- 0. Configuration Variables ---
+# NOTE: You MUST define your connection variables (server, USERNAME, PSSWD, DB, etc.)
+# in your environment or at the beginning of your script for this to run.
+
+# Connection details (Example placeholders - replace with your actual values)
+# server = '105.52.12.164,1433'
+# USERNAME = 'rfuseradmin'
+# PSSWD = 'Newtisgreat!'
+# DB = 'RANCOMM'
+
+# Define the ne_type values and their correct report names
+CDU30_TYPE = 'macro_indoor_dist'  # macro_indoor_dist -> CDU30
+UADPF_TYPE = 'udu_cnf'           # udu_cnf -> uADPF
+# 🚨 ACTION REQUIRED: Replace 'nsb_type' with the actual ne_type for NSB sites
+NSB_TYPE = 'nsb_type' 
+NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+
+# Define the file path for the output
+OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
+CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
+# ----------------------------------
+
+# --- 1. Database Connection and Query Setup ---
+
+# Assuming connection variables are defined in the current scope
+server_tcp = 'tcp:' + server 
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+
+
+# --------------------------------------------------------------------------
+# 2. SQL QUERY (MINIMAL COLUMNS & FILTERING)
+# --------------------------------------------------------------------------
+
+# This query selects only the required raw data columns.
+SQL_QUERY = f"""
 SELECT
-    M.[market_id],
-    M.[NE_ID],
-    M.[NE_PREFIX],
-    M.[ne_type],
-    M.[EMS NAME],
-    M.[NE NAME],
-    M.[NE SOFTWARE],
+    -- Columns needed for Grouping/Report Index:
     M.[region],
-    M.[eNB_ID],
     
-    -- Columns from OVData table
+    -- Columns needed for Filtering/Categorization:
+    M.[NE_ID],
+    M.[ne_type],
+    M.[NE NAME],
+    
+    -- Columns needed for Custom LTE Key creation (done in Python):
+    M.[market_id],
+    
+    -- Columns needed from OVData:
     OV.[P:Related ENB IDs],
-    OV.[P:Project Site Type],
-    
-    -- Custom LTE calculation (remains with CONCAT for safety)
-    CONCAT(CAST(M.market_id AS NVARCHAR(10)), 
-           RIGHT(CAST(M.NE_ID AS NVARCHAR(10)), 3)) AS "Custom LTE"
+    OV.[P:Project Site Type]
     
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
 LEFT JOIN [RANCOMM].[dbo].[OVData] OV
     ON M.[eNB_ID] = OV.[P:Related ENB IDs] 
 
 WHERE 
-    M.ne_type IN ('macro_indoor_dist', 'udu_cnf', 'nsb_type')
+    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
+"""
+
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing (Chunking)
+# --------------------------------------------------------------------------
+
+header_written = False
+
+print(f"Starting memory-efficient fetch and processing, saving to {OUTPUT_FILE}...")
+print(f"Processing database query in chunks of {CHUNK_SIZE} rows.")
+
+# Define the SC conditions outside the loop
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
 ]
-(Background on this error at: https://sqlalche.me/e/20/f405)
+
+try:
+    # Use read_sql_query with chunksize to read the large result set
+    for chunk_df in pd.read_sql_query(SQL_QUERY, engine, chunksize=CHUNK_SIZE):
+        
+        # --- Apply Python Logic to the Chunk ---
+        
+        # NEW STEP: Create the Custom LTE key in Python to avoid SQL conversion errors
+        chunk_df['Custom LTE'] = chunk_df['market_id'].astype(str) + \
+                                  chunk_df['NE_ID'].astype(str).str.slice(-3)
+
+        # 1. Strip and lowercase NE NAME
+        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
+        
+        # 2. Apply categorization (Macro/SC)
+        # Note: Keeps your custom rule: or x.startswith('4')
+        chunk_df['category'] = chunk_df['NE NAME'].apply(
+            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
+        )
+        
+        # --- Write Chunk to CSV ---
+        
+        # Write header only for the first chunk
+        chunk_df.to_csv(
+            OUTPUT_FILE, 
+            mode='a', 
+            header=not header_written, 
+            index=False
+        )
+        
+        if not header_written:
+            print(f"First chunk saved and header written.")
+            header_written = True
+        
+    print("\n✅ Data processing complete. All chunks saved to CSV.")
+
+except Exception as e:
+    print(f"\nFATAL ERROR during chunk processing: {e}")
