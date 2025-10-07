@@ -2,39 +2,41 @@ import pandas as pd
 import pyodbc
 import os
 from sqlalchemy import create_engine
-import dask.dataframe as dd # Not used, can be removed
-import numpy as np # Not used, can be removed
+# dask.dataframe and numpy are not used and are removed
+
+# NOTE: server, DB, USERNAME, PSSWD must be defined for the code to run.
+# Assuming these variables are defined in your environment before execution.
 
 # Define the ne_type values and their correct report names
 CDU30_TYPE = 'macro_indoor_dist'
 UADPF_TYPE = 'udu_cnf'
 NSB_TYPE = 'nsb_type' 
 NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+NE_TYPES_STRING = "', '".join(NE_TYPES_FILTER) # Used for the SQL IN clause
 
 # Define the file path for the output
 OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
 CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
-
-# NOTE: server, DB, USERNAME, PSSWD must be defined elsewhere (e.g., in a secure config file)
-# Assuming they are defined in your working environment for the code to run.
 
 # ------------------------------------------------------------------
 
 # --- 1. Database Connection and Query Setup ---
 
 # Configure the connection string and engine
-server_tcp = 'tcp:' + server 
-connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
-engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+# Ensure the variables 'server', 'DB', 'USERNAME', 'PSSWD' are defined!
+try:
+    server_tcp = 'tcp:' + server 
+    connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+    engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+except NameError:
+    print("FATAL ERROR: Database connection variables (server, DB, USERNAME, PSSWD) are not defined.")
+    exit()
 
 # --------------------------------------------------------------------------
 # 2. SQL QUERIES 
 # --------------------------------------------------------------------------
 
 # 2a. Query for the main site mapping data (M)
-# It's safer to use parameterized queries or string join for IN clauses in production, 
-# but this is fine since the values are internally defined constants.
-NE_TYPES_STRING = "', '".join(NE_TYPES_FILTER) # More robust way to build the IN clause
 MAIN_DATA_QUERY = f"""
 SELECT
     M.[market_id],
@@ -66,10 +68,10 @@ FROM [VZW_SNAP].[dbo].[VZW_4G_CIQ_MAIN]
 # 3. Memory-Efficient Processing
 # --------------------------------------------------------------------------
 
-# FIX: Delete the existing output file to prevent appending old data
+# Delete the existing output file to prevent appending old data
 if os.path.exists(OUTPUT_FILE):
     os.remove(OUTPUT_FILE)
-    print(f"Removed existing file: {OUTPUT_FILE}")
+    print(f"Removed existing CSV file: {OUTPUT_FILE}")
 
 header_written = False
 sc_conditions = [
@@ -77,83 +79,66 @@ sc_conditions = [
     'ib', 'das', 'sc', 'odas' 
 ]
 
-print(f"Starting memory-efficient process. Output: {OUTPUT_FILE}")
-print(f"1. Fetching small OVData lookup table...")
+print(f"Starting memory-efficient process. Output CSV: {OUTPUT_FILE}")
 
-# Load the small OVData lookup table ONCE
+# --- Load Lookup Tables ---
+print(f"1. Fetching small OVData lookup table...")
 try:
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
-    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup.")
     
-    # ENHANCED CLEANING FOR LOOKUP KEY (P_ENB_ID)
-    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip()
-    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'\.0$', '', regex=True)
-    # **AGGRESSIVE CLEANING:** Remove non-alphanumeric/non-space characters
+    # Cleaning and Deduping OV Lookup
+    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
-    
-    # FIX FOR DUPLICATES: Keep only the first unique entry for each P_ENB_ID
     initial_lookup_count = len(df_ov_lookup)
     df_ov_lookup.drop_duplicates(subset=['P_ENB_ID'], keep='first', inplace=True)
-    print(f"   Removed {initial_lookup_count - len(df_ov_lookup)} duplicate entries from lookup table.")
+    print(f"   Loaded {len(df_ov_lookup)} records for lookup (removed {initial_lookup_count - len(df_ov_lookup)} duplicates).")
 
-except Exception as e:
-    print(f"FATAL ERROR: Could not load OVData lookup table. Verify column name [P_ENB_ID] and connection: {e}")
-    exit()
-
-# Load the VZW_4G_CIQ_MAIN table
-try:
     df_vzw = pd.read_sql(VZW_4G_CIQ_MAIN_QUERY, engine)
     df_vzw['Samsung eNB ID'] = df_vzw['Samsung eNB ID'].astype(str).str.strip()
+    print(f"   Loaded {len(df_vzw)} records from VZW CIQ table.")
+    
 except Exception as e:
-    print(f"FATAL ERROR: Could not load VZW_4G_CIQ_MAIN table: {e}")
+    print(f"FATAL ERROR: Could not load required lookup tables: {e}")
     exit()
 
 print(f"2. Processing main sites data in chunks of {CHUNK_SIZE} rows...")
 
 processed_chunks = []
 
-# --- FIX START: Correctly structure the main processing loop within a try/except ---
+# --- Main Chunking Process and Error Handling ---
 try: 
     for chunk_df in pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE):
         
-        # --- Python Logic for Key Creation and Merge ---
+        # 💥 FIX 1: Remove duplicates based on NE_ID (primary key) in the main data
+        initial_rows = len(chunk_df)
+        chunk_df.drop_duplicates(subset=['NE_ID'], keep='first', inplace=True)
+        if len(chunk_df) < initial_rows:
+            print(f"   Warning: Removed {initial_rows - len(chunk_df)} duplicate NE_ID records in this chunk.")
         
         # 1. ENHANCED CLEANING: Prepare components for the Custom LTE key
         market_id_str = chunk_df['market_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         ne_id_str = chunk_df['NE_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
-        # Create the Custom LTE key
+        # Create the Custom LTE key and aggressively clean it
         chunk_df['Custom LTE'] = market_id_str + ne_id_str.str.slice(-3)
-        
-        # **AGGRESSIVE CLEANING:** Apply the same cleaning to Custom LTE key
         chunk_df['Custom LTE'] = chunk_df['Custom LTE'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
         
-        # 2. PERFORM THE SINGLE-KEY MERGE 
+        # 2. PERFORM THE OVData MERGE 
         chunk_df = pd.merge(
             chunk_df, 
             df_ov_lookup, 
-            left_on='Custom LTE',  # Main data key (aggressively cleaned)
-            right_on='P_ENB_ID',   # Lookup data key (aggressively cleaned)
+            left_on='Custom LTE', 
+            right_on='P_ENB_ID',
             how='left'
         )
-        
-        # Use the P:Project Site Type column directly
-        chunk_df['Project Site Type'] = chunk_df['P:Project Site Type']
-
-        # Replace the remaining NaN (which means merge failure) with a descriptive message
-        chunk_df['Project Site Type'] = chunk_df['Project Site Type'].fillna('Merge Key Mismatch')
-
-        # Drop the intermediate columns
+        chunk_df['Project Site Type'] = chunk_df['P:Project Site Type'].fillna('Merge Key Mismatch')
         chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
         
-        # Update ne_type based on VZW_4G_CIQ_MAIN table
+        # 3. PERFORM THE VZW CIQ MERGE (to update ne_type)
         chunk_df['NE_ID'] = chunk_df['NE_ID'].astype(str).str.strip()
-        
-        # FIX: The indicator column in merge is 'both', 'left_only', or 'right_only'. 
-        # The logic below is correct to check if a match was found ('both').
         chunk_df = pd.merge(chunk_df, df_vzw, left_on='NE_ID', right_on='Samsung eNB ID', how='left', indicator=True)
         chunk_df['ne_type'] = chunk_df.apply(lambda row: 'nsb_type' if row['_merge'] == 'both' else row['ne_type'], axis=1)
-        chunk_df.drop(columns=['Samsung eNB ID', '_merge'], inplace=True, errors='ignore') # Added errors='ignore' for robustness
+        chunk_df.drop(columns=['Samsung eNB ID', '_merge'], inplace=True, errors='ignore')
 
         # 4. Categorization (Macro/SC)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
@@ -164,9 +149,7 @@ try:
         # 5. Add the S// ID
         chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
-        # --- Write Chunk to CSV ---
-        
-        # Define the EXPLICIT list of columns for the output CSV, as requested
+        # Define the EXPLICIT list of columns for the output CSV
         output_columns = [
             'region',
             'NE_ID',
@@ -179,7 +162,7 @@ try:
             'Project Site Type' 
         ]
         
-        # Write header only for the first chunk
+        # Write chunk to CSV
         chunk_df[output_columns].to_csv(
             OUTPUT_FILE, 
             mode='a', 
@@ -192,72 +175,69 @@ try:
             header_written = True
         
         # Append the chunk to the list for later summary creation
-        processed_chunks.append(chunk_df[output_columns].copy()) # .copy() avoids potential SettingWithCopyWarning
+        processed_chunks.append(chunk_df[output_columns].copy())
 
-    # 3. Summary Creation and Excel Export (Execute AFTER the loop completes)
-    
+    # --- Summary Creation and Excel Export (Runs only after all chunks are processed) ---
+
     # Concatenate the processed chunks
     df_processed = pd.concat(processed_chunks, ignore_index=True)
     
-    # Create a summary table
-    summary_table = df_processed.groupby(['region', 'ne_type', 'category']).size().reset_index(name='count')
+    # Create the summary table
+    summary_table_base = df_processed.groupby(['region', 'ne_type', 'category']).size().reset_index(name='count')
     
-    # Pivot the summary table to get the desired format
-    summary_table = summary_table.pivot_table(index='region', columns=['ne_type', 'category'], values='count', aggfunc='sum', fill_value=0) # Added fill_value=0
-    
-    # Flatten the column index
-    summary_table.columns = [f"{col[0]}_{col[1]}" for col in summary_table.columns]
+    # 💥 FIX 2: Ensure the Excel file is created, even if the summary is complex or empty
+    if summary_table_base.empty:
+        print("Warning: No records processed for the final summary table. Creating empty summary placeholder.")
+        summary_table = pd.DataFrame({'Region': ['No Data']}, index=['No Data']).set_index('Region')
+    else:
+        # Pivot the summary table
+        summary_table = summary_table_base.pivot_table(
+            index='region', 
+            columns=['ne_type', 'category'], 
+            values='count', 
+            aggfunc='sum', 
+            fill_value=0
+        )
+        summary_table.columns = [f"{col[0]}_{col[1]}" for col in summary_table.columns]
 
-    # Add total columns
-    for ne_type in ['macro_indoor_dist', 'udu_cnf', 'nsb_type']:
-        ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF' if ne_type == 'udu_cnf' else 'NSB'
-        macro_col = f"{ne_type}_Macro"
-        sc_col = f"{ne_type}_SC"
+        # Add total columns
+        final_cols_order = []
+        for ne_type in ['macro_indoor_dist', 'udu_cnf', 'nsb_type']:
+            ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF' if ne_type == 'udu_cnf' else 'NSB'
+            macro_col = f"{ne_type}_Macro"
+            sc_col = f"{ne_type}_SC"
+            total_col = f"{ne_type_short}_Total"
+            
+            # Use .get() with 0 to safely sum even if a column is missing entirely
+            macro_counts = summary_table.get(macro_col, 0)
+            sc_counts = summary_table.get(sc_col, 0)
+
+            summary_table[total_col] = macro_counts + sc_counts
+            
+            # Build the column order list (only include columns that exist)
+            final_cols_order.extend([
+                col for col in [total_col, macro_col, sc_col] if col in summary_table.columns
+            ])
+            
+        # Reorder the columns
+        if final_cols_order:
+            summary_table = summary_table[final_cols_order]
         
-        # Use .get() with a default of 0 to handle cases where a combination is missing
-        macro_counts = summary_table.get(macro_col, 0)
-        sc_counts = summary_table.get(sc_col, 0)
+        # Add Total row
+        summary_table.loc['Total'] = summary_table.sum()
 
-        summary_table[f"{ne_type_short}_Total"] = macro_counts + sc_counts
-    
-    # Reorder the columns
-    columns = []
-    for ne_type in ['macro_indoor_dist', 'udu_cnf', 'nsb_type']:
-        ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF' if ne_type == 'udu_cnf' else 'NSB'
-        total_col = f"{ne_type_short}_Total"
-        macro_col = f"{ne_type}_Macro"
-        sc_col = f"{ne_type}_SC"
-        
-        # Check if the columns exist before trying to add them
-        if total_col in summary_table.columns and macro_col in summary_table.columns and sc_col in summary_table.columns:
-            columns.extend([total_col, macro_col, sc_col])
-        elif total_col in summary_table.columns:
-             # Handle cases where one of the Macro/SC columns might be missing but the total exists
-            columns.append(total_col)
-            if macro_col in summary_table.columns: columns.append(macro_col)
-            if sc_col in summary_table.columns: columns.append(sc_col)
-
-    
-    # Filter and reorder the summary table
-    summary_table = summary_table[[col for col in columns if col in summary_table.columns]]
-    
-    # Add Total row
-    summary_table.loc['Total'] = summary_table.sum()
-    
-    # Save the summary table to a new Excel sheet
-    print("\nAttempting to save to output.xlsx...")
-    with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer: # Using xlsxwriter engine is often better
+    # Save the raw data and the summary table to the Excel file
+    print("\nSaving final output to output.xlsx...")
+    with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
         df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
         summary_table.to_excel(writer, sheet_name='Summary Table')
-
-    # Print the final summary table
+        print("Successfully created 'output.xlsx' with two sheets.")
+        
+    # Print the summary table
     print("\n--- Summary Table ---")
     print(summary_table)
 
 except Exception as e:
-    # This catches errors in the main processing loop or the summary creation
     print(f"\nCRITICAL RUNTIME ERROR: An error occurred during main processing or summary creation: {e}")
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
-
-# --- FIX END ---
