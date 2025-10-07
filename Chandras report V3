@@ -7,7 +7,7 @@ import numpy as np
 # NOTE: server, DB, USERNAME, PSSWD must be defined for the code to run.
 
 # Define the ne_type values and their correct report names
-CDU30_TYPE = 'macro_indoor_dist' # The type that is conditionally changed
+CDU30_TYPE = 'macro_indoor_dist' 
 UADPF_TYPE = 'udu_cnf'
 NSB_TYPE = 'nsb_type' 
 NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
@@ -22,6 +22,18 @@ CHUNK_SIZE = 50000
 MASTER_SITELIST_PATH = r'\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx' 
 
 # ------------------------------------------------------------------
+# 🛠️ NEW FUNCTION: Aggressive ID Normalization
+def normalize_id(series):
+    """Converts ID series to clean, stripped, integer-based strings."""
+    # Convert to string, strip whitespace
+    s = series.astype(str).str.strip()
+    # Remove floating point suffix (.0) if present
+    s = s.str.replace(r'\.0$', '', regex=True)
+    # Remove any non-alphanumeric characters (if necessary for key consistency)
+    s = s.str.replace(r'[^\w]', '', regex=True)
+    return s
+
+# ------------------------------------------------------------------
 # --- 1. Database Connection and Query Setup ---
 try:
     server_tcp = 'tcp:' + server 
@@ -33,7 +45,6 @@ except NameError:
 
 # --------------------------------------------------------------------------
 # 2. SQL QUERIES (Unchanged)
-# --------------------------------------------------------------------------
 MAIN_DATA_QUERY = f"""
 SELECT
     M.[market_id],
@@ -47,16 +58,11 @@ WHERE
 """
 
 OV_LOOKUP_QUERY = """
-SELECT 
-    [P_ENB_ID],             
-    [P:Project Site Type]
-FROM [RANCOMM].[dbo].[OVData]
+SELECT [P_ENB_ID], [P:Project Site Type] FROM [RANCOMM].[dbo].[OVData]
 """
 
 VZW_4G_CIQ_MAIN_QUERY = """
-SELECT 
-    [Samsung eNB ID]
-FROM [VZW_SNAP].[dbo].[VZW_4G_CIQ_MAIN]
+SELECT [Samsung eNB ID] FROM [VZW_SNAP].[dbo].[VZW_4G_CIQ_MAIN]
 """
 
 # --------------------------------------------------------------------------
@@ -77,23 +83,23 @@ processed_chunks = []
 
 print(f"Starting processing in chunks of {CHUNK_SIZE} rows...")
 
-# --- Load Lookup Tables ---
+# --- Load Lookup Tables with Aggressive Normalization ---
 try:
     # 1. OV Data Lookup
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
-    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
+    df_ov_lookup['P_ENB_ID'] = normalize_id(df_ov_lookup['P_ENB_ID'])
     df_ov_lookup.drop_duplicates(subset=['P_ENB_ID'], keep='first', inplace=True)
-
+    
     # 2. VZW CIQ Data Lookup
     df_vzw = pd.read_sql(VZW_4G_CIQ_MAIN_QUERY, engine)
-    df_vzw['Samsung eNB ID'] = df_vzw['Samsung eNB ID'].astype(str).str.strip()
+    # 🛠️ APPLY AGGRESSIVE NORMALIZATION
+    df_vzw['Samsung eNB ID'] = normalize_id(df_vzw['Samsung eNB ID'])
     vzw_id_set = set(df_vzw['Samsung eNB ID'].unique())
 
-    # 3. MASTER SITELIST Lookup (Reading Column A, which is iloc[:, 0])
+    # 3. MASTER SITELIST Lookup
     df_master = pd.read_excel(MASTER_SITELIST_PATH, engine='openpyxl')
-    # Use iloc[:, 0] to select the first column (Column A) regardless of its header name
-    df_master_ids = df_master.iloc[:, 0].astype(str).str.strip() 
+    # 🛠️ APPLY AGGRESSIVE NORMALIZATION to Column A (iloc[:, 0])
+    df_master_ids = normalize_id(df_master.iloc[:, 0]) 
     master_id_set = set(df_master_ids.unique())
     
     print(f"   Loaded lookup tables. OV: {len(df_ov_lookup)} records, VZW unique IDs: {len(vzw_id_set)}, Master unique IDs: {len(master_id_set)}.")
@@ -109,13 +115,13 @@ try:
     for i, chunk_df in enumerate(pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE)):
         print(f"   Processing chunk {i+1}...")
         
-        # Initial NE_ID cleaning for merges/lookups
-        chunk_df['NE_ID_Clean'] = chunk_df['NE_ID'].astype(str).str.strip()
+        # 🛠️ APPLY AGGRESSIVE NORMALIZATION to NE_ID from main data
+        chunk_df['NE_ID_Clean'] = normalize_id(chunk_df['NE_ID'])
         
         # 1. Key Creation (Custom LTE)
-        market_id_str = chunk_df['market_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        market_id_str = normalize_id(chunk_df['market_id'])
         chunk_df['Custom LTE'] = market_id_str + chunk_df['NE_ID_Clean'].str.slice(-3)
-        chunk_df['Custom LTE'] = chunk_df['Custom LTE'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
+        # Note: Custom LTE is complex, but the NE_ID part is now clean
         
         # 2. PERFORM THE OVData MERGE 
         chunk_df = pd.merge(chunk_df, df_ov_lookup, left_on='Custom LTE', right_on='P_ENB_ID', how='left')
@@ -123,19 +129,15 @@ try:
         chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
         
         # 3. SIMPLIFIED CONDITIONAL NE_TYPE UPDATE
-        
-        # Base condition: Only consider sites that are originally CDU30_TYPE
         cdu30_base_condition = (chunk_df['ne_type'] == CDU30_TYPE)
         
         # Condition for NSB: NOT in VZW CIQ AND NOT in Master Site List
         cond_not_vzw = ~chunk_df['NE_ID_Clean'].isin(vzw_id_set)
         cond_not_master = ~chunk_df['NE_ID_Clean'].isin(master_id_set)
         
-        # The new rule: NSB if CDU30 AND (NOT VZW) AND (NOT Master)
+        # The rule: NSB if CDU30 AND (NOT VZW) AND (NOT Master)
         nsb_condition = cdu30_base_condition & cond_not_vzw & cond_not_master
         
-        # Apply the update: change ne_type to NSB_TYPE where the condition is True
-        # Keep the original value (CDU30_TYPE) in all other cases
         chunk_df.loc[nsb_condition, 'ne_type'] = NSB_TYPE
         
         chunk_df.drop(columns=['NE_ID_Clean'], inplace=True) # Drop temporary column
