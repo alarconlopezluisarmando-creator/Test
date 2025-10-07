@@ -7,8 +7,7 @@ import re
 
 # --- 0. Configuration Variables ---
 # NOTE: You MUST replace these placeholders with your actual connection details.
-# The 'server' variable must be defined in your environment/script for this to work
-# Example: 
+# Assuming you have defined these variables elsewhere, like:
 # server = '105.52.12.164,1433'
 # USERNAME = 'rfuseradmin'
 # PSSWD = 'Newtisgreat!'
@@ -29,6 +28,7 @@ CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
 # --- 1. Database Connection and Query Setup ---
 
 # Configure the connection string and engine
+# The 'server' variable must be defined in your environment/script for this to work
 server_tcp = 'tcp:' + server 
 connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
@@ -76,12 +76,15 @@ print(f"1. Fetching small OVData lookup table...")
 # Load the small OVData lookup table ONCE
 try:
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
-    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup.")
+    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup. ✅")
     
-    # 💡 FIX for 'object and float64' error: Force the merge key to be a string type
+    # 💡 FIX 1: Rename the descriptive column to clearly mark its content
+    df_ov_lookup.rename(columns={'P:Project Site Type': 'Project_Site_Type_Value'}, inplace=True)
+    
+    # 💡 FIX 2: Force the merge key to be a string type to avoid 'float64' error
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str)
     
-    print("   Data type correction applied to P_ENB_ID column. ✅")
+    print("   Data type correction and renaming applied to lookup table. ✅")
 
 except Exception as e:
     print(f"FATAL ERROR: Could not load OVData lookup table. Please verify column name [P_ENB_ID] and connection: {e}")
@@ -100,7 +103,7 @@ try:
         chunk_df['Custom LTE'] = chunk_df['market_id'].astype(str) + \
                                   chunk_df['NE_ID'].astype(str).str.slice(-3)
         
-        # 2. PERFORM THE MERGE IN PYTHON 
+        # 2. PERFORM THE MERGE IN PYTHON (This pulls the Project_Site_Type_Value)
         chunk_df = pd.merge(
             chunk_df, 
             df_ov_lookup, 
@@ -126,7 +129,7 @@ try:
         # Define the explicit order for the output CSV columns
         output_columns = [
             'region', 'NE_ID', 'ne_type', 'NE NAME', 'market_id', 
-            'Custom LTE', 'S// ID', 'P:Project Site Type', 'category'
+            'Custom LTE', 'S// ID', 'Project_Site_Type_Value', 'category' # <-- Uses the renamed column
         ]
         
         # Write header only for the first chunk
