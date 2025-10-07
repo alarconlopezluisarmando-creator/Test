@@ -2,6 +2,7 @@ import pandas as pd
 import pyodbc
 import os
 from sqlalchemy import create_engine
+import numpy as np 
 
 # NOTE: server, DB, USERNAME, PSSWD must be defined for the code to run.
 
@@ -17,10 +18,12 @@ TEMP_CSV_PATH = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
 EXCEL_OUTPUT_FILE = os.path.join(os.path.dirname(TEMP_CSV_PATH), 'raw_data.xlsx')
 CHUNK_SIZE = 50000
 
+# File Path for Mastersitelist
+MASTER_SITELIST_PATH = r'\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx' 
+
 # ------------------------------------------------------------------
 # --- 1. Database Connection and Query Setup ---
 try:
-    # Assuming connection variables are globally defined in your script environment
     server_tcp = 'tcp:' + server 
     connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
     engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
@@ -29,7 +32,7 @@ except NameError:
     exit()
 
 # --------------------------------------------------------------------------
-# 2. SQL QUERIES 
+# 2. SQL QUERIES (Unchanged)
 # --------------------------------------------------------------------------
 MAIN_DATA_QUERY = f"""
 SELECT
@@ -76,21 +79,27 @@ print(f"Starting processing in chunks of {CHUNK_SIZE} rows...")
 
 # --- Load Lookup Tables ---
 try:
-    # OV Data Lookup (Project Site Type)
+    # 1. OV Data Lookup
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
     df_ov_lookup.drop_duplicates(subset=['P_ENB_ID'], keep='first', inplace=True)
 
-    # VZW CIQ Data Lookup (Samsung eNB ID)
+    # 2. VZW CIQ Data Lookup
     df_vzw = pd.read_sql(VZW_4G_CIQ_MAIN_QUERY, engine)
     df_vzw['Samsung eNB ID'] = df_vzw['Samsung eNB ID'].astype(str).str.strip()
     vzw_id_set = set(df_vzw['Samsung eNB ID'].unique())
 
-    print(f"   Loaded lookup tables. OV: {len(df_ov_lookup)} records, VZW unique IDs: {len(vzw_id_set)}.")
+    # 3. MASTER SITELIST Lookup (Reading Column A, which is iloc[:, 0])
+    df_master = pd.read_excel(MASTER_SITELIST_PATH, engine='openpyxl')
+    # Use iloc[:, 0] to select the first column (Column A) regardless of its header name
+    df_master_ids = df_master.iloc[:, 0].astype(str).str.strip() 
+    master_id_set = set(df_master_ids.unique())
+    
+    print(f"   Loaded lookup tables. OV: {len(df_ov_lookup)} records, VZW unique IDs: {len(vzw_id_set)}, Master unique IDs: {len(master_id_set)}.")
     
 except Exception as e:
-    print(f"FATAL ERROR: Could not load required lookup tables: {e}")
+    print(f"FATAL ERROR: Could not load required lookup tables or file ('{e}'). Check file path/permissions for {MASTER_SITELIST_PATH}.")
     exit()
 
 print("Processing main sites data...")
@@ -100,10 +109,12 @@ try:
     for i, chunk_df in enumerate(pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE)):
         print(f"   Processing chunk {i+1}...")
         
+        # Initial NE_ID cleaning for merges/lookups
+        chunk_df['NE_ID_Clean'] = chunk_df['NE_ID'].astype(str).str.strip()
+        
         # 1. Key Creation (Custom LTE)
         market_id_str = chunk_df['market_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        ne_id_str = chunk_df['NE_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        chunk_df['Custom LTE'] = market_id_str + ne_id_str.str.slice(-3)
+        chunk_df['Custom LTE'] = market_id_str + chunk_df['NE_ID_Clean'].str.slice(-3)
         chunk_df['Custom LTE'] = chunk_df['Custom LTE'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
         
         # 2. PERFORM THE OVData MERGE 
@@ -111,16 +122,23 @@ try:
         chunk_df['Project Site Type'] = chunk_df['P:Project Site Type'].fillna('Merge Key Mismatch')
         chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
         
-        # 3. CONDITIONAL NE_TYPE UPDATE (The specific requirement)
-        chunk_df['NE_ID_Clean'] = chunk_df['NE_ID'].astype(str).str.strip()
+        # 3. SIMPLIFIED CONDITIONAL NE_TYPE UPDATE
         
-        # Check if original type is CDU30 AND NE_ID is found in the VZW CIQ set
-        condition = (chunk_df['ne_type'] == CDU30_TYPE) & (chunk_df['NE_ID_Clean'].isin(vzw_id_set))
+        # Base condition: Only consider sites that are originally CDU30_TYPE
+        cdu30_base_condition = (chunk_df['ne_type'] == CDU30_TYPE)
+        
+        # Condition for NSB: NOT in VZW CIQ AND NOT in Master Site List
+        cond_not_vzw = ~chunk_df['NE_ID_Clean'].isin(vzw_id_set)
+        cond_not_master = ~chunk_df['NE_ID_Clean'].isin(master_id_set)
+        
+        # The new rule: NSB if CDU30 AND (NOT VZW) AND (NOT Master)
+        nsb_condition = cdu30_base_condition & cond_not_vzw & cond_not_master
         
         # Apply the update: change ne_type to NSB_TYPE where the condition is True
-        chunk_df.loc[condition, 'ne_type'] = NSB_TYPE
+        # Keep the original value (CDU30_TYPE) in all other cases
+        chunk_df.loc[nsb_condition, 'ne_type'] = NSB_TYPE
         
-        chunk_df.drop(columns=['NE_ID_Clean'], inplace=True)
+        chunk_df.drop(columns=['NE_ID_Clean'], inplace=True) # Drop temporary column
 
         # 4. Categorization (Macro/SC)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
@@ -138,7 +156,7 @@ try:
 
     df_processed = pd.concat(processed_chunks, ignore_index=True)
     
-    # Global Deduping for Cross-Chunk Duplicates
+    # Global Deduping
     initial_rows = len(df_processed)
     df_processed.drop_duplicates(
         subset=['NE_ID', 'market_id', 'ne_type'],
@@ -172,7 +190,7 @@ try:
         
         summary_table.loc['Total'] = summary_table.sum()
 
-    # Save the Excel file (Uses overwrite mode implicitly with pd.ExcelWriter)
+    # Save the Excel file
     print(f"\nSaving final output to {EXCEL_OUTPUT_FILE}...")
     with pd.ExcelWriter(EXCEL_OUTPUT_FILE, engine='xlsxwriter') as writer:
         df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
@@ -186,7 +204,3 @@ except Exception as e:
     print(f"\nCRITICAL RUNTIME ERROR: An error occurred during main processing or summary creation: {e}")
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
-
-
-
-\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx
