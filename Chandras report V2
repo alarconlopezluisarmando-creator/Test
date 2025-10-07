@@ -1,8 +1,9 @@
-Starting memory-efficient fetch and processing, saving to C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv...
-Processing database query in chunks of 50000 rows.
+# --------------------------------------------------------------------------
+# 2. SQL QUERY (MERGE and FILTERING) - FIXED with EXPLICIT COLUMNS
+# --------------------------------------------------------------------------
 
-FATAL ERROR during chunk processing: (pyodbc.ProgrammingError) ('42000', '[42000] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Error converting data type varchar to float. (8114) (SQLExecDirectW)')
-[SQL: 
+# We MUST list all columns explicitly instead of using M.* to bypass the conversion error.
+SQL_QUERY = f"""
 SELECT
     M.[market_id],
     M.[NE_ID],
@@ -13,18 +14,19 @@ SELECT
     M.[NE SOFTWARE],
     M.[region],
     M.[eNB_ID],
+    
+    -- Columns from OVData table
     OV.[P:Related ENB IDs],
     OV.[P:Project Site Type],
-    -- CORRECTED: Use CONCAT() to safely join strings, preventing the float conversion error
+    
+    -- Custom LTE calculation (remains with CONCAT for safety)
     CONCAT(CAST(M.market_id AS NVARCHAR(10)), 
            RIGHT(CAST(M.NE_ID AS NVARCHAR(10)), 3)) AS "Custom LTE"
     
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
 LEFT JOIN [RANCOMM].[dbo].[OVData] OV
-    -- NOTE: Assuming eNB_ID is the correct column to join on, adjust if needed
     ON M.[eNB_ID] = OV.[P:Related ENB IDs] 
 
 WHERE 
-    M.ne_type IN ('macro_indoor_dist', 'udu_cnf', 'nsb_type')
-]
-(Background on this error at: https://sqlalche.me/e/20/f405)
+    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
+"""
