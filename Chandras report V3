@@ -92,13 +92,12 @@ try:
     
     # 2. VZW CIQ Data Lookup
     df_vzw = pd.read_sql(VZW_4G_CIQ_MAIN_QUERY, engine)
-    # 🛠️ APPLY AGGRESSIVE NORMALIZATION
     df_vzw['Samsung eNB ID'] = normalize_id(df_vzw['Samsung eNB ID'])
     vzw_id_set = set(df_vzw['Samsung eNB ID'].unique())
 
     # 3. MASTER SITELIST Lookup
     df_master = pd.read_excel(MASTER_SITELIST_PATH, engine='openpyxl')
-    # 🛠️ APPLY AGGRESSIVE NORMALIZATION to Column A (iloc[:, 0])
+    # Use iloc[:, 0] to select the first column (Column A) regardless of its header name
     df_master_ids = normalize_id(df_master.iloc[:, 0]) 
     master_id_set = set(df_master_ids.unique())
     
@@ -115,20 +114,28 @@ try:
     for i, chunk_df in enumerate(pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE)):
         print(f"   Processing chunk {i+1}...")
         
-        # 🛠️ APPLY AGGRESSIVE NORMALIZATION to NE_ID from main data
+        # 🛑 NEW FILTERING STEP 🛑
+        initial_rows = len(chunk_df)
+        chunk_df = chunk_df[~chunk_df['NE NAME'].astype(str).str.upper().str.contains('GROW_', na=False)].copy()
+        rows_removed = initial_rows - len(chunk_df)
+        if rows_removed > 0:
+            print(f"      Removed {rows_removed} rows containing 'GROW_' in NE NAME.")
+        
+        # 1. Initial NE_ID cleaning for merges/lookups
         chunk_df['NE_ID_Clean'] = normalize_id(chunk_df['NE_ID'])
         
-        # 1. Key Creation (Custom LTE)
+        # 2. Key Creation (Custom LTE)
         market_id_str = normalize_id(chunk_df['market_id'])
         chunk_df['Custom LTE'] = market_id_str + chunk_df['NE_ID_Clean'].str.slice(-3)
-        # Note: Custom LTE is complex, but the NE_ID part is now clean
+        # OV Data relies on this Custom LTE key, no need to clean it further
         
-        # 2. PERFORM THE OVData MERGE 
+        # 3. PERFORM THE OVData MERGE 
         chunk_df = pd.merge(chunk_df, df_ov_lookup, left_on='Custom LTE', right_on='P_ENB_ID', how='left')
         chunk_df['Project Site Type'] = chunk_df['P:Project Site Type'].fillna('Merge Key Mismatch')
         chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
         
-        # 3. SIMPLIFIED CONDITIONAL NE_TYPE UPDATE
+        # 4. SIMPLIFIED CONDITIONAL NE_TYPE UPDATE
+        # Base condition: Only consider sites that are originally CDU30_TYPE
         cdu30_base_condition = (chunk_df['ne_type'] == CDU30_TYPE)
         
         # Condition for NSB: NOT in VZW CIQ AND NOT in Master Site List
@@ -142,13 +149,13 @@ try:
         
         chunk_df.drop(columns=['NE_ID_Clean'], inplace=True) # Drop temporary column
 
-        # 4. Categorization (Macro/SC)
+        # 5. Categorization (Macro/SC)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
         chunk_df['category'] = chunk_df['NE NAME'].apply(
             lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
         )
         
-        # 5. Add the S// ID
+        # 6. Add the S// ID
         chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
         output_columns = ['region', 'NE_ID', 'market_id', 'Custom LTE', 'S// ID', 'ne_type', 'NE NAME', 'category', 'Project Site Type']
