@@ -1,9 +1,8 @@
-# --------------------------------------------------------------------------
-# 2. SQL QUERY (MERGE and FILTERING) - FIXED with EXPLICIT COLUMNS
-# --------------------------------------------------------------------------
+Starting memory-efficient fetch and processing, saving to C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv...
+Processing database query in chunks of 50000 rows.
 
-# We MUST list all columns explicitly instead of using M.* to bypass the conversion error.
-SQL_QUERY = f"""
+FATAL ERROR during chunk processing: (pyodbc.ProgrammingError) ('42000', '[42000] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Error converting data type varchar to float. (8114) (SQLExecDirectW)')
+[SQL: 
 SELECT
     M.[market_id],
     M.[NE_ID],
@@ -28,5 +27,6 @@ LEFT JOIN [RANCOMM].[dbo].[OVData] OV
     ON M.[eNB_ID] = OV.[P:Related ENB IDs] 
 
 WHERE 
-    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
-"""
+    M.ne_type IN ('macro_indoor_dist', 'udu_cnf', 'nsb_type')
+]
+(Background on this error at: https://sqlalche.me/e/20/f405)
