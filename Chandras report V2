@@ -1,1 +1,26 @@
-FATAL ERROR during chunk processing: You are trying to merge on object and float64 columns for key 'Custom LTE'. If you wish to proceed you should use pd.concat
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing (Updated Lookup)
+# --------------------------------------------------------------------------
+
+header_written = False
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+
+print(f"Starting memory-efficient process. Output: {OUTPUT_FILE}")
+print(f"1. Fetching small OVData lookup table...")
+
+# Load the small OVData lookup table ONCE
+try:
+    df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
+    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup.")
+    
+    # 💡 FIX: Force the merge key to be a string type to match 'Custom LTE'
+    df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str)
+    
+    print("   Data type correction applied to P_ENB_ID column. ✅")
+
+except Exception as e:
+    print(f"FATAL ERROR: Could not load OVData lookup table. Please verify column name [P_ENB_ID] and connection: {e}")
+    exit()
