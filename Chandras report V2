@@ -5,46 +5,79 @@ import numpy as np
 import os
 import re
 
-# --- Configuration Variables (Same as before) ---
+# --- 0. Configuration Variables ---
+# NOTE: Your connection details must be defined here.
 server = '105.52.12.164,1433'
 USERNAME = 'rfuseradmin'
 PSSWD = 'Newtisgreat!'
 DB = 'RANCOMM'
+
+# Define the ne_type values and their correct report names
 CDU30_TYPE = 'macro_indoor_dist'
 UADPF_TYPE = 'udu_cnf'
 NSB_TYPE = 'nsb_type' 
 NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+
+# Define the file path for the output
 OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
-CHUNK_SIZE = 50000 
+CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
+
+# --- MAPPING DICTIONARY (DEFINE YOUR REAL VALUES HERE) ---
 PROJECT_TYPE_MAPPER = {
-    1: 'MACRO', 2: 'Small Cell', 3: 'In Building', 4: 'DAS',
+    1: 'MACRO',
+    2: 'Small Cell',
+    3: 'In Building',
+    4: 'DAS',
+    # Add other mappings as necessary
 }
 # ------------------------------------------------------------------
 
-# --- Database Connection and Query Setup (Same as before) ---
+# --- 1. Database Connection and Query Setup ---
+
+# Configure the connection string and engine
 server_tcp = 'tcp:' + server 
 connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
 
-MAIN_DATA_QUERY = f"""
-SELECT M.[market_id], M.[NE_ID], M.[ne_type], M.[NE NAME], M.[region]
-FROM [RANCOMM].[dbo].[daily_sites_mapping] M
-WHERE M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
-"""
-OV_LOOKUP_QUERY = """
-SELECT [P_ENB_ID], [P:Project Site Type]
-FROM [RANCOMM].[dbo].[OVData]
-"""
+# --------------------------------------------------------------------------
+# 2. SQL QUERIES 
 # --------------------------------------------------------------------------
 
-# --- 3. Memory-Efficient Processing ---
+# 2a. Query for the main site mapping data (M)
+MAIN_DATA_QUERY = f"""
+SELECT
+    M.[market_id],
+    M.[NE_ID],
+    M.[ne_type],
+    M.[NE NAME],
+    M.[region]
+FROM [RANCOMM].[dbo].[daily_sites_mapping] M
+WHERE 
+    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
+"""
 
+# 2b. Query for the OVData LOOKUP TABLE 
+OV_LOOKUP_QUERY = """
+SELECT 
+    [P_ENB_ID],             
+    [P:Project Site Type]
+FROM [RANCOMM].[dbo].[OVData]
+"""
+
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing
+# --------------------------------------------------------------------------
+
+# 💡 FIX: Delete the existing output file to prevent appending old data
 if os.path.exists(OUTPUT_FILE):
     os.remove(OUTPUT_FILE)
     print(f"Removed existing file: {OUTPUT_FILE}")
 
 header_written = False
-sc_conditions = ['sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 'ib', 'das', 'sc', 'odas']
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
 
 print(f"Starting memory-efficient process. Output: {OUTPUT_FILE}")
 print(f"1. Fetching small OVData lookup table...")
@@ -60,7 +93,7 @@ try:
     # 💡 ENHANCED CLEANING FOR LOOKUP KEY (P_ENB_ID)
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip()
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'\.0$', '', regex=True)
-    # **NEW:** Aggressive cleaning to remove non-alphanumeric chars (e.g., tabs, weird spaces)
+    # **AGGRESSIVE CLEANING:** Remove non-alphanumeric/non-space characters
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
     
     # FIX FOR DUPLICATES: Keep only the first unique entry for each P_ENB_ID
@@ -87,25 +120,26 @@ try:
         # Create the Custom LTE key
         chunk_df['Custom LTE'] = market_id_str + ne_id_str.str.slice(-3)
         
-        # **NEW:** Aggressive cleaning to Custom LTE key before merge
+        # **AGGRESSIVE CLEANING:** Apply the same cleaning to Custom LTE key
         chunk_df['Custom LTE'] = chunk_df['Custom LTE'].str.replace(r'[^\w\s]', '', regex=True).str.strip()
         
         # 2. PERFORM THE SINGLE-KEY MERGE 
         chunk_df = pd.merge(
             chunk_df, 
             df_ov_lookup, 
-            left_on='Custom LTE',  # Main data key (now aggressively cleaned)
-            right_on='P_ENB_ID',   # Lookup data key (now aggressively cleaned)
+            left_on='Custom LTE',  # Main data key (aggressively cleaned)
+            right_on='P_ENB_ID',   # Lookup data key (aggressively cleaned)
             how='left'
         )
         
         # 3. MAP THE NUMERIC ID TO DESCRIPTIVE TEXT
+        
+        # This function maps the numeric ID to the text, only if the ID is NOT null (meaning the merge succeeded)
         chunk_df['Project Site Type'] = chunk_df['Project_Type_ID'].apply(
             lambda x: PROJECT_TYPE_MAPPER.get(x, 'Unknown/N/A') if pd.notna(x) else x
         )
         
-        # Set any remaining NaN merge failures to a specific status, ensuring we don't accidentally fill unmapped IDs
-        # We fill NaN first, then handle the 'Unknown/N/A' from the mapper.
+        # Replace the remaining NaN (which means merge failure) with a descriptive message
         chunk_df['Project Site Type'] = chunk_df['Project Site Type'].fillna('Merge Key Mismatch')
 
         # Drop the intermediate ID column
@@ -122,10 +156,18 @@ try:
         
         # --- Write Chunk to CSV ---
         
-        # Define the EXPLICIT list of columns for the output CSV
+        # Define the EXPLICIT list of columns for the output CSV, as requested
         output_columns = [
-            'region', 'NE_ID', 'market_id', 'Custom LTE', 'S// ID', 'P_ENB_ID', 
-            'ne_type', 'NE NAME', 'category', 'Project Site Type' 
+            'region',
+            'NE_ID',
+            'market_id', 
+            'Custom LTE', 
+            'S// ID', 
+            'P_ENB_ID', 
+            'ne_type',
+            'NE NAME',
+            'category', 
+            'Project Site Type' 
         ]
         
         # Write header only for the first chunk
