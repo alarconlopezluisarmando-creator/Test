@@ -186,3 +186,7 @@ except Exception as e:
     print(f"\nCRITICAL RUNTIME ERROR: An error occurred during main processing or summary creation: {e}")
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
+
+
+
+\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx
