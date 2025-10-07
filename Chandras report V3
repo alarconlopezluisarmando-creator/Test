@@ -16,6 +16,8 @@ NE_TYPES_STRING = "', '".join(NE_TYPES_FILTER) # Used for the SQL IN clause
 
 # Define the file path for the output
 OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
+# 🌟 NEW VARIABLE: Defines the path for the final Excel file (raw_data.xlsx)
+EXCEL_OUTPUT_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), 'raw_data.xlsx')
 CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
 
 # ------------------------------------------------------------------
@@ -23,7 +25,6 @@ CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
 # --- 1. Database Connection and Query Setup ---
 
 # Configure the connection string and engine
-# Ensure the variables 'server', 'DB', 'USERNAME', 'PSSWD' are defined!
 try:
     server_tcp = 'tcp:' + server 
     connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
@@ -73,6 +74,11 @@ if os.path.exists(OUTPUT_FILE):
     os.remove(OUTPUT_FILE)
     print(f"Removed existing CSV file: {OUTPUT_FILE}")
 
+# Also remove the target Excel file if it exists, to ensure a clean run
+if os.path.exists(EXCEL_OUTPUT_FILE):
+    os.remove(EXCEL_OUTPUT_FILE)
+    print(f"Removed existing Excel file: {EXCEL_OUTPUT_FILE}")
+
 header_written = False
 sc_conditions = [
     'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
@@ -109,7 +115,7 @@ processed_chunks = []
 try: 
     for chunk_df in pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE):
         
-        # 💥 FIX 1: Remove duplicates based on NE_ID (primary key) in the main data
+        # FIX: Remove duplicates based on NE_ID (primary key) in the main data
         initial_rows = len(chunk_df)
         chunk_df.drop_duplicates(subset=['NE_ID'], keep='first', inplace=True)
         if len(chunk_df) < initial_rows:
@@ -185,7 +191,6 @@ try:
     # Create the summary table
     summary_table_base = df_processed.groupby(['region', 'ne_type', 'category']).size().reset_index(name='count')
     
-    # 💥 FIX 2: Ensure the Excel file is created, even if the summary is complex or empty
     if summary_table_base.empty:
         print("Warning: No records processed for the final summary table. Creating empty summary placeholder.")
         summary_table = pd.DataFrame({'Region': ['No Data']}, index=['No Data']).set_index('Region')
@@ -200,7 +205,7 @@ try:
         )
         summary_table.columns = [f"{col[0]}_{col[1]}" for col in summary_table.columns]
 
-        # Add total columns
+        # Add total columns and build column order
         final_cols_order = []
         for ne_type in ['macro_indoor_dist', 'udu_cnf', 'nsb_type']:
             ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF' if ne_type == 'udu_cnf' else 'NSB'
@@ -208,13 +213,11 @@ try:
             sc_col = f"{ne_type}_SC"
             total_col = f"{ne_type_short}_Total"
             
-            # Use .get() with 0 to safely sum even if a column is missing entirely
             macro_counts = summary_table.get(macro_col, 0)
             sc_counts = summary_table.get(sc_col, 0)
 
             summary_table[total_col] = macro_counts + sc_counts
             
-            # Build the column order list (only include columns that exist)
             final_cols_order.extend([
                 col for col in [total_col, macro_col, sc_col] if col in summary_table.columns
             ])
@@ -227,11 +230,11 @@ try:
         summary_table.loc['Total'] = summary_table.sum()
 
     # Save the raw data and the summary table to the Excel file
-    print("\nSaving final output to output.xlsx...")
-    with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
+    print(f"\nSaving final output to {EXCEL_OUTPUT_FILE}...")
+    with pd.ExcelWriter(EXCEL_OUTPUT_FILE, engine='xlsxwriter') as writer:
         df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
         summary_table.to_excel(writer, sheet_name='Summary Table')
-        print("Successfully created 'output.xlsx' with two sheets.")
+        print(f"Successfully created '{EXCEL_OUTPUT_FILE}' with two sheets.")
         
     # Print the summary table
     print("\n--- Summary Table ---")
