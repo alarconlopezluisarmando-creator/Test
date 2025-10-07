@@ -104,3 +104,108 @@ print("\n" + "="*80)
 print("     Samsung Site Count Report with FLAT Column Headers")
 print("="*80)
 print(report)
+
+-- V2. 
+
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+import numpy as np
+
+# --- 0. Configuration Variables (You should have these defined elsewhere) ---
+# Assuming these variables are defined in your environment or at the top of your script
+# server = '105.52.12.164,1433'
+# server_tcp = 'tcp:' + server
+# USERNAME = 'rfuseradmin'
+# PSSWD = 'Newtisgreat!'
+# DB = 'RANCOMM'
+
+# Define the ne_type values corresponding to your three count groups
+CDU30_TYPE = 'udu_cnf'
+UADPF_TYPE = 'macro_indoor_dist'
+# 🚨 ACTION REQUIRED: Replace 'nsb_type' with the actual ne_type for NSB sites
+NSB_TYPE = 'nsb_type' 
+# --------------------------------------------------------------------------
+
+# Configure the connection string and engine
+# Assuming server, server_tcp, USERNAME, PSSWD, DB are defined above or in the current scope
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+
+# --- 1. Data Fetch ---
+query = """SELECT 
+       [market_id]
+      ,[NE_ID]
+      ,[NE_PREFIX]
+      ,[ne_type]
+      ,[EMS NAME]
+      ,[NE NAME]
+      ,[NE SOFTWARE]
+      ,[region]
+      ,[eNB_ID]
+  FROM [RANCOMM].[dbo].[daily_sites_mapping]"""
+
+try:
+    df = pd.read_sql(query, engine)
+    print(f"Successfully fetched {len(df)} records. 💾")
+except Exception as e:
+    print(f"❌ Error connecting to database or fetching data: {e}")
+    exit()
+
+# --- 2. Filtering and Categorization ---
+
+# Filter for the relevant ne_types
+df = df[(df['ne_type'] == CDU30_TYPE) | (df['ne_type'] == UADPF_TYPE) | (df['ne_type'] == NSB_TYPE)]
+
+# Define the expanded SC conditions (using "contains" logic)
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+
+# Create a new column to categorize NE NAME
+df['NE NAME'] = df['NE NAME'].str.strip().str.lower()
+df['category'] = df['NE NAME'].apply(lambda x: 'SC' if any(cond in x for cond in sc_conditions) else 'Macro')
+
+# --- 3. Final Report Aggregation and Formatting ---
+
+# Map the raw ne_type values to the desired base column names
+ne_type_map = {
+    CDU30_TYPE: 'CDU30',
+    UADPF_TYPE: 'uADPF',
+    NSB_TYPE: 'NSB'
+}
+
+# Create a temporary column for the top-level header name
+df['technology'] = df['ne_type'].map(ne_type_map)
+
+# Group and count NE_ID
+report_series = df.groupby(['region', 'technology', 'category'])['NE_ID'].count()
+
+# Unstack all levels except 'region' to get a MultiIndex column structure
+report = report_series.unstack(level=['technology', 'category']).fillna(0).astype(int)
+
+# --- 4. Flatten the Column Headers ---
+
+# Flatten the MultiIndex columns from ('CDU30', 'Macro') to 'CDU30_Macro'
+report.columns = [f'{tech}_{cat}' for tech, cat in report.columns]
+
+# Define the explicit order for the flat columns
+ordered_cols_flat = [
+    'CDU30_Macro', 'CDU30_SC', 
+    'uADPF_Macro', 'uADPF_SC', 
+    'NSB_Macro', 'NSB_SC'
+]
+
+# Reorder the final report columns, filtering for existing ones
+final_cols = [col for col in ordered_cols_flat if col in report.columns]
+report = report[final_cols]
+
+# Clean up index name
+report.index.name = 'Region / Site Count'
+
+print("\n" + "="*80)
+print("     Samsung Site Count Report with FLAT Column Headers")
+print("="*80)
+print(report)
+
