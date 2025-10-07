@@ -2,8 +2,8 @@ import pandas as pd
 import pyodbc
 import os
 from sqlalchemy import create_engine
-import dask.dataframe as dd
-import numpy as np
+import dask.dataframe as dd # Not used, can be removed
+import numpy as np # Not used, can be removed
 
 # Define the ne_type values and their correct report names
 CDU30_TYPE = 'macro_indoor_dist'
@@ -14,6 +14,9 @@ NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
 # Define the file path for the output
 OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
 CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
+
+# NOTE: server, DB, USERNAME, PSSWD must be defined elsewhere (e.g., in a secure config file)
+# Assuming they are defined in your working environment for the code to run.
 
 # ------------------------------------------------------------------
 
@@ -29,6 +32,9 @@ engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fas
 # --------------------------------------------------------------------------
 
 # 2a. Query for the main site mapping data (M)
+# It's safer to use parameterized queries or string join for IN clauses in production, 
+# but this is fine since the values are internally defined constants.
+NE_TYPES_STRING = "', '".join(NE_TYPES_FILTER) # More robust way to build the IN clause
 MAIN_DATA_QUERY = f"""
 SELECT
     M.[market_id],
@@ -38,7 +44,7 @@ SELECT
     M.[region]
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
 WHERE 
-    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
+    M.ne_type IN ('{NE_TYPES_STRING}')
 """
 
 # 2b. Query for the OVData LOOKUP TABLE 
@@ -105,7 +111,9 @@ except Exception as e:
 print(f"2. Processing main sites data in chunks of {CHUNK_SIZE} rows...")
 
 processed_chunks = []
-try:
+
+# --- FIX START: Correctly structure the main processing loop within a try/except ---
+try: 
     for chunk_df in pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE):
         
         # --- Python Logic for Key Creation and Merge ---
@@ -140,9 +148,12 @@ try:
         
         # Update ne_type based on VZW_4G_CIQ_MAIN table
         chunk_df['NE_ID'] = chunk_df['NE_ID'].astype(str).str.strip()
+        
+        # FIX: The indicator column in merge is 'both', 'left_only', or 'right_only'. 
+        # The logic below is correct to check if a match was found ('both').
         chunk_df = pd.merge(chunk_df, df_vzw, left_on='NE_ID', right_on='Samsung eNB ID', how='left', indicator=True)
         chunk_df['ne_type'] = chunk_df.apply(lambda row: 'nsb_type' if row['_merge'] == 'both' else row['ne_type'], axis=1)
-        chunk_df.drop(columns=['Samsung eNB ID', '_merge'], inplace=True)
+        chunk_df.drop(columns=['Samsung eNB ID', '_merge'], inplace=True, errors='ignore') # Added errors='ignore' for robustness
 
         # 4. Categorization (Macro/SC)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
@@ -180,8 +191,11 @@ try:
             print(f"   First chunk saved and header written.")
             header_written = True
         
-        processed_chunks.append(chunk_df)
+        # Append the chunk to the list for later summary creation
+        processed_chunks.append(chunk_df[output_columns].copy()) # .copy() avoids potential SettingWithCopyWarning
 
+    # 3. Summary Creation and Excel Export (Execute AFTER the loop completes)
+    
     # Concatenate the processed chunks
     df_processed = pd.concat(processed_chunks, ignore_index=True)
     
@@ -189,7 +203,7 @@ try:
     summary_table = df_processed.groupby(['region', 'ne_type', 'category']).size().reset_index(name='count')
     
     # Pivot the summary table to get the desired format
-    summary_table = summary_table.pivot_table(index='region', columns=['ne_type', 'category'], values='count', aggfunc='sum')
+    summary_table = summary_table.pivot_table(index='region', columns=['ne_type', 'category'], values='count', aggfunc='sum', fill_value=0) # Added fill_value=0
     
     # Flatten the column index
     summary_table.columns = [f"{col[0]}_{col[1]}" for col in summary_table.columns]
@@ -199,8 +213,12 @@ try:
         ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF' if ne_type == 'udu_cnf' else 'NSB'
         macro_col = f"{ne_type}_Macro"
         sc_col = f"{ne_type}_SC"
-        if macro_col in summary_table.columns and sc_col in summary_table.columns:
-            summary_table[f"{ne_type_short}_Total"] = summary_table[[macro_col, sc_col]].sum(axis=1)
+        
+        # Use .get() with a default of 0 to handle cases where a combination is missing
+        macro_counts = summary_table.get(macro_col, 0)
+        sc_counts = summary_table.get(sc_col, 0)
+
+        summary_table[f"{ne_type_short}_Total"] = macro_counts + sc_counts
     
     # Reorder the columns
     columns = []
@@ -209,24 +227,37 @@ try:
         total_col = f"{ne_type_short}_Total"
         macro_col = f"{ne_type}_Macro"
         sc_col = f"{ne_type}_SC"
+        
+        # Check if the columns exist before trying to add them
         if total_col in summary_table.columns and macro_col in summary_table.columns and sc_col in summary_table.columns:
             columns.extend([total_col, macro_col, sc_col])
+        elif total_col in summary_table.columns:
+             # Handle cases where one of the Macro/SC columns might be missing but the total exists
+            columns.append(total_col)
+            if macro_col in summary_table.columns: columns.append(macro_col)
+            if sc_col in summary_table.columns: columns.append(sc_col)
+
     
-    if columns:
-        summary_table = summary_table[columns]
+    # Filter and reorder the summary table
+    summary_table = summary_table[[col for col in columns if col in summary_table.columns]]
     
-        # Add Total row
-        summary_table.loc['Total'] = summary_table.sum()
+    # Add Total row
+    summary_table.loc['Total'] = summary_table.sum()
     
-        # Save the summary table to a new Excel sheet
-        with pd.ExcelWriter('output.xlsx') as writer:
-            df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
-            summary_table.to_excel(writer, sheet_name='Summary Table')
-    
-        # Print the summary table
-        print(summary_table)
-    
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        print("\nData processing complete. All chunks saved to CSV.")
+    # Save the summary table to a new Excel sheet
+    print("\nAttempting to save to output.xlsx...")
+    with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer: # Using xlsxwriter engine is often better
+        df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
+        summary_table.to_excel(writer, sheet_name='Summary Table')
+
+    # Print the final summary table
+    print("\n--- Summary Table ---")
+    print(summary_table)
+
+except Exception as e:
+    # This catches errors in the main processing loop or the summary creation
+    print(f"\nCRITICAL RUNTIME ERROR: An error occurred during main processing or summary creation: {e}")
+finally:
+    print("\nData processing attempt complete. Check files and logs for details.")
+
+# --- FIX END ---
