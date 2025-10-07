@@ -1,29 +1,146 @@
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+import numpy as np
+import os
+import re
+
+# --- 0. Configuration Variables ---
+# NOTE: You MUST replace these placeholders with your actual connection details.
+# server = '105.52.12.164,1433'
+# USERNAME = 'rfuseradmin'
+# PSSWD = 'Newtisgreat!'
+# DB = 'RANCOMM'
+# server_tcp = 'tcp:' + server # Assuming server variable is defined
+
+# Define the ne_type values and their correct report names
+CDU30_TYPE = 'macro_indoor_dist'
+UADPF_TYPE = 'udu_cnf'
+# 🚨 ACTION REQUIRED: Replace 'nsb_type' with the actual ne_type for NSB sites
+NSB_TYPE = 'nsb_type' 
+NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+
+# Define the file path for the output
+OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
+CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
+# ----------------------------------
+
+# --- 1. Database Connection and Query Setup ---
+
+# Configure the connection string and engine
+# Assuming connection variables are defined in the current scope
+server_tcp = 'tcp:' + server 
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+
 # --------------------------------------------------------------------------
-# 2. SQL QUERY (FINAL ATTEMPT: EXPLICIT CASTING ON JOIN)
+# 2. SQL QUERIES
 # --------------------------------------------------------------------------
 
-SQL_QUERY = f"""
+# 2a. Query for the main site mapping data (M)
+# This selects minimal columns and filters the main table.
+MAIN_DATA_QUERY = f"""
 SELECT
-    -- Columns needed for Grouping/Report Index:
-    M.[region],
-    
-    -- Columns needed for Filtering/Categorization:
+    M.[market_id],
     M.[NE_ID],
     M.[ne_type],
     M.[NE NAME],
-    
-    -- Columns needed for Custom LTE Key creation (done in Python):
-    M.[market_id],
-    
-    -- Columns needed from OVData:
-    OV.[P:Project Site Type]
+    M.[region]
     
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
-LEFT JOIN [RANCOMM].[dbo].[OVData] OV
-    -- 💡 FIX: Explicitly CAST both sides of the join to NVARCHAR 
-    -- to prevent SQL Server from attempting numeric conversion.
-    ON CAST(M.[eNB_ID] AS NVARCHAR(50)) = CAST(OV.[P:Related ENB IDs] AS NVARCHAR(50))
 
 WHERE 
     M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
 """
+
+# 2b. Query for the OVData LOOKUP TABLE
+# This loads ONLY the required key and value columns from OVData once.
+OV_LOOKUP_QUERY = """
+SELECT 
+    [P:END ID],              -- The column to match with 'Custom LTE'
+    [P:Project Site Type]
+FROM [RANCOMM].[dbo].[OVData]
+"""
+
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing
+# --------------------------------------------------------------------------
+
+header_written = False
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+
+print(f"Starting memory-efficient process. Output: {OUTPUT_FILE}")
+print(f"1. Fetching small OVData lookup table...")
+
+# Load the small OVData lookup table ONCE
+try:
+    df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
+    print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup. ✅")
+except Exception as e:
+    print(f"FATAL ERROR: Could not load OVData lookup table: {e}")
+    exit()
+
+
+print(f"2. Processing main sites data in chunks of {CHUNK_SIZE} rows...")
+
+try:
+    # Use read_sql_query with chunksize to read the large main result set
+    for chunk_df in pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE):
+        
+        # --- Python Logic for Key Creation and Merge ---
+        
+        # 1. Create the Custom LTE key in Python (avoids SQL conversion errors)
+        chunk_df['Custom LTE'] = chunk_df['market_id'].astype(str) + \
+                                  chunk_df['NE_ID'].astype(str).str.slice(-3)
+        
+        # 2. PERFORM THE MERGE IN PYTHON (large chunk + small lookup table)
+        chunk_df = pd.merge(
+            chunk_df, 
+            df_ov_lookup, 
+            left_on='Custom LTE', 
+            right_on='P:END ID', 
+            how='left'
+        )
+        
+        # Clean up the redundant merge key column from OVData
+        chunk_df.drop(columns=['P:END ID'], inplace=True)
+        
+        # 3. Categorization (Macro/SC)
+        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
+        chunk_df['category'] = chunk_df['NE NAME'].apply(
+            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
+        )
+        
+        # 4. Add the S// ID based on regex of P:END ID (if needed, otherwise remove)
+        # Assuming you still want the S// ID column, we'll calculate it from the Custom LTE key
+        # since it's the most reliable unique identifier created in this context.
+        # NOTE: If S// ID was meant to be extracted from P:END ID, you need to adjust this line.
+        chunk_df['S// ID'] = chunk_df['Custom LTE'] 
+        
+        # --- Write Chunk to CSV ---
+        
+        # Ensure the column order is consistent for the output CSV
+        output_columns = [
+            'region', 'NE_ID', 'ne_type', 'NE NAME', 'market_id', 
+            'Custom LTE', 'S// ID', 'P:Project Site Type', 'category'
+        ]
+        
+        # Write header only for the first chunk
+        chunk_df[output_columns].to_csv(
+            OUTPUT_FILE, 
+            mode='a', 
+            header=not header_written, 
+            index=False
+        )
+        
+        if not header_written:
+            print(f"   First chunk saved and header written.")
+            header_written = True
+        
+    print("\n✅ Data processing complete. All chunks saved to CSV.")
+
+except Exception as e:
+    print(f"\nFATAL ERROR during chunk processing: {e}")
