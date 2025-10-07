@@ -71,6 +71,11 @@ FROM [RANCOMM].[dbo].[OVData]
 # 3. Memory-Efficient Processing
 # --------------------------------------------------------------------------
 
+# 💡 FIX: Delete the existing output file to prevent appending old data
+if os.path.exists(OUTPUT_FILE):
+    os.remove(OUTPUT_FILE)
+    print(f"Removed existing file: {OUTPUT_FILE}")
+
 header_written = False
 sc_conditions = [
     'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
@@ -88,7 +93,7 @@ try:
     # FIX 1: Rename the ID column for clarity
     df_ov_lookup.rename(columns={'P:Project Site Type': 'Project_Type_ID'}, inplace=True)
     
-    # 💡 FIX 2 (CRITICAL): Aggressive cleaning and casting for the merge key
+    # FIX 2 (CRITICAL): Aggressive cleaning and casting for the merge key
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     
     print("   Data type correction and cleaning applied to lookup table. ✅")
@@ -120,8 +125,6 @@ try:
             right_on='P_ENB_ID',   # Lookup data key
             how='left'
         )
-        
-        # NOTE: Removed the 'drop' statement for P_ENB_ID to keep it in the dataframe.
         
         # 3. MAP THE NUMERIC ID TO DESCRIPTIVE TEXT
         chunk_df['Project_Description_Value'] = chunk_df['Project_Type_ID'].map(PROJECT_TYPE_MAPPER).fillna('Unknown/N/A')
