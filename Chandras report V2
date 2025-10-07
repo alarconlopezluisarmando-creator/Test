@@ -7,11 +7,12 @@ import re
 
 # --- 0. Configuration Variables ---
 # NOTE: You MUST replace these placeholders with your actual connection details.
+# Assuming you have defined these variables elsewhere, like:
 # server = '105.52.12.164,1433'
 # USERNAME = 'rfuseradmin'
 # PSSWD = 'Newtisgreat!'
 # DB = 'RANCOMM'
-# server_tcp = 'tcp:' + server # Assuming server variable is defined
+# server_tcp = 'tcp:' + server 
 
 # Define the ne_type values and their correct report names
 CDU30_TYPE = 'macro_indoor_dist'
@@ -28,7 +29,7 @@ CHUNK_SIZE = 50000  # Number of rows to process in memory at a time
 # --- 1. Database Connection and Query Setup ---
 
 # Configure the connection string and engine
-# Assuming connection variables are defined in the current scope
+# The 'server' variable must be defined in your environment/script for this to work
 server_tcp = 'tcp:' + server 
 connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
@@ -54,10 +55,10 @@ WHERE
 """
 
 # 2b. Query for the OVData LOOKUP TABLE
-# This loads ONLY the required key and value columns from OVData once.
+# CORRECTED to use [P_ENB_ID] as requested.
 OV_LOOKUP_QUERY = """
 SELECT 
-    [P:END ID],              -- The column to match with 'Custom LTE'
+    [P_ENB_ID],              -- CORRECTED: The key column for the 'Custom LTE' merge
     [P:Project Site Type]
 FROM [RANCOMM].[dbo].[OVData]
 """
@@ -80,7 +81,7 @@ try:
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
     print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup. ✅")
 except Exception as e:
-    print(f"FATAL ERROR: Could not load OVData lookup table: {e}")
+    print(f"FATAL ERROR: Could not load OVData lookup table. Please verify column name [P_ENB_ID] and connection: {e}")
     exit()
 
 
@@ -93,6 +94,7 @@ try:
         # --- Python Logic for Key Creation and Merge ---
         
         # 1. Create the Custom LTE key in Python (avoids SQL conversion errors)
+        # Assumes market_id and NE_ID should be treated as strings for concatenation
         chunk_df['Custom LTE'] = chunk_df['market_id'].astype(str) + \
                                   chunk_df['NE_ID'].astype(str).str.slice(-3)
         
@@ -101,12 +103,12 @@ try:
             chunk_df, 
             df_ov_lookup, 
             left_on='Custom LTE', 
-            right_on='P:END ID', 
+            right_on='P_ENB_ID',  # CORRECTED: Merging on P_ENB_ID
             how='left'
         )
         
         # Clean up the redundant merge key column from OVData
-        chunk_df.drop(columns=['P:END ID'], inplace=True)
+        chunk_df.drop(columns=['P_ENB_ID'], inplace=True) 
         
         # 3. Categorization (Macro/SC)
         chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
@@ -114,15 +116,12 @@ try:
             lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
         )
         
-        # 4. Add the S// ID based on regex of P:END ID (if needed, otherwise remove)
-        # Assuming you still want the S// ID column, we'll calculate it from the Custom LTE key
-        # since it's the most reliable unique identifier created in this context.
-        # NOTE: If S// ID was meant to be extracted from P:END ID, you need to adjust this line.
+        # 4. Add the S// ID. Using Custom LTE as the most logical identifier in this context.
         chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
         # --- Write Chunk to CSV ---
         
-        # Ensure the column order is consistent for the output CSV
+        # Define the explicit order for the output CSV columns
         output_columns = [
             'region', 'NE_ID', 'ne_type', 'NE NAME', 'market_id', 
             'Custom LTE', 'S// ID', 'P:Project Site Type', 'category'
