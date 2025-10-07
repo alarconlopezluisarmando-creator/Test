@@ -6,7 +6,7 @@ import os
 import re
 
 # --- 0. Configuration Variables ---
-# NOTE: You MUST replace these placeholders with your actual connection details.
+# NOTE: Your connection details must be defined here.
 # Assuming you have defined these variables elsewhere, like:
 # server = '105.52.12.164,1433'
 # USERNAME = 'rfuseradmin'
@@ -34,10 +34,10 @@ connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tc
 engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
 
 # --------------------------------------------------------------------------
-# 2. SQL QUERIES
+# 2. SQL QUERIES (SIMPLIFIED FOR SINGLE-KEY MERGE)
 # --------------------------------------------------------------------------
 
-# 2a. Query for the main site mapping data (M) - Minimal columns selected
+# 2a. Query for the main site mapping data (M)
 MAIN_DATA_QUERY = f"""
 SELECT
     M.[market_id],
@@ -45,14 +45,13 @@ SELECT
     M.[ne_type],
     M.[NE NAME],
     M.[region]
-    
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
-
 WHERE 
     M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
 """
 
-# 2b. Query for the OVData LOOKUP TABLE - Uses the confirmed [P_ENB_ID]
+# 2b. Query for the OVData LOOKUP TABLE 
+# Selecting the P_ENB_ID (the key) and P:Project Site Type (the value)
 OV_LOOKUP_QUERY = """
 SELECT 
     [P_ENB_ID],             
@@ -78,8 +77,9 @@ try:
     df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
     print(f"   Successfully loaded {len(df_ov_lookup)} records for lookup. ✅")
     
-    # 💡 FIX 1: Rename the descriptive column to clearly mark its content
-    df_ov_lookup.rename(columns={'P:Project Site Type': 'Project_Site_Type_Value'}, inplace=True)
+    # 💡 FIX 1: Rename the descriptive column to ensure we get the text value
+    # We rename the column here to ensure it's captured correctly during the merge.
+    df_ov_lookup.rename(columns={'P:Project Site Type': 'Project_Description_Value'}, inplace=True)
     
     # 💡 FIX 2: Force the merge key to be a string type to avoid 'float64' error
     df_ov_lookup['P_ENB_ID'] = df_ov_lookup['P_ENB_ID'].astype(str)
@@ -87,7 +87,7 @@ try:
     print("   Data type correction and renaming applied to lookup table. ✅")
 
 except Exception as e:
-    print(f"FATAL ERROR: Could not load OVData lookup table. Please verify column name [P_ENB_ID] and connection: {e}")
+    print(f"FATAL ERROR: Could not load OVData lookup table. Verify column name [P_ENB_ID] and connection: {e}")
     exit()
 
 
@@ -99,16 +99,16 @@ try:
         
         # --- Python Logic for Key Creation and Merge ---
         
-        # 1. Create the Custom LTE key in Python
+        # 1. Create the Custom LTE key
         chunk_df['Custom LTE'] = chunk_df['market_id'].astype(str) + \
                                   chunk_df['NE_ID'].astype(str).str.slice(-3)
         
-        # 2. PERFORM THE MERGE IN PYTHON (This pulls the Project_Site_Type_Value)
+        # 2. PERFORM THE SINGLE-KEY MERGE (Custom LTE == P_ENB_ID)
         chunk_df = pd.merge(
             chunk_df, 
             df_ov_lookup, 
-            left_on='Custom LTE', 
-            right_on='P_ENB_ID',  
+            left_on='Custom LTE',  # Main data key
+            right_on='P_ENB_ID',   # Lookup data key
             how='left'
         )
         
@@ -121,7 +121,7 @@ try:
             lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
         )
         
-        # 4. Add the S// ID
+        # 4. Add the S// ID (Reverting to Custom LTE as the S// ID for simplicity)
         chunk_df['S// ID'] = chunk_df['Custom LTE'] 
         
         # --- Write Chunk to CSV ---
@@ -129,7 +129,7 @@ try:
         # Define the explicit order for the output CSV columns
         output_columns = [
             'region', 'NE_ID', 'ne_type', 'NE NAME', 'market_id', 
-            'Custom LTE', 'S// ID', 'Project_Site_Type_Value', 'category' # <-- Uses the renamed column
+            'Custom LTE', 'S// ID', 'Project_Description_Value', 'category' 
         ]
         
         # Write header only for the first chunk
