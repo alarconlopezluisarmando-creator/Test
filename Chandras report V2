@@ -1,20 +1,118 @@
+import pandas as pd
+import pyodbc
+from sqlalchemy import create_engine
+import numpy as np
+import os
+
+# --- 0. Configuration Variables ---
+# NOTE: You MUST define your connection variables (server, USERNAME, PSSWD, DB, etc.)
+# in your environment or at the beginning of your script for this to run.
+# Example:
+# server = '105.52.12.164,1433'
+# server_tcp = 'tcp:' + server
+# USERNAME = 'rfuseradmin'
+# PSSWD = 'Newtisgreat!'
+# DB = 'RANCOMM'
+# ----------------------------------
+
+# Define the ne_type values and their correct report names
+CDU30_TYPE = 'macro_indoor_dist'  # Corrected: macro_indoor_dist -> CDU30
+UADPF_TYPE = 'udu_cnf'           # Corrected: udu_cnf -> uADPF
+# 🚨 ACTION REQUIRED: Replace 'nsb_type' with the actual ne_type for NSB sites
+NSB_TYPE = 'nsb_type' 
+NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+
+# Define the file path for the output
+# Ensure this path exists on your system.
+OUTPUT_FILE = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv'
+
+# --- 1. Database Connection and Query Setup ---
+
+# Configure the connection string and engine
+# Assuming connection variables are defined in the current scope
+server_tcp = 'tcp:' + server # Re-define server_tcp if necessary
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+
+
 # --------------------------------------------------------------------------
-# 1. Define the SQL Query with the JOIN, Custom LTE calculation, and initial filtering
+# 2. SQL QUERY (MERGE and FILTERING)
 # --------------------------------------------------------------------------
 
+# This single query replaces fetching two large tables and performing the merge in Python.
 SQL_QUERY = f"""
 SELECT
-    M.*,
+    M.[market_id],
+    M.[NE_ID],
+    M.[NE_PREFIX],
+    M.[ne_type],
+    M.[EMS NAME],
+    M.[NE NAME],
+    M.[NE SOFTWARE],
+    M.[region],
+    M.[eNB_ID],
     OV.[P:Related ENB IDs],
     OV.[P:Project Site Type],
-    -- CORRECTED: Using CONCAT() for safe string joining to avoid float conversion errors
+    -- CORRECTED: Use CONCAT() to safely join strings, preventing the float conversion error
     CONCAT(CAST(M.market_id AS NVARCHAR(10)), 
            RIGHT(CAST(M.NE_ID AS NVARCHAR(10)), 3)) AS "Custom LTE"
     
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
 LEFT JOIN [RANCOMM].[dbo].[OVData] OV
-    ON M.[eNB_ID] = OV.[P:Related ENB IDs]
+    -- NOTE: Assuming eNB_ID is the correct column to join on, adjust if needed
+    ON M.[eNB_ID] = OV.[P:Related ENB IDs] 
 
 WHERE 
     M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
 """
+
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing (Chunking)
+# --------------------------------------------------------------------------
+
+CHUNK_SIZE = 50000  # Load 50,000 rows into memory at a time
+header_written = False
+
+print(f"Starting memory-efficient fetch and processing, saving to {OUTPUT_FILE}...")
+print(f"Processing database query in chunks of {CHUNK_SIZE} rows.")
+
+# Define the SC conditions outside the loop
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+
+try:
+    # Use read_sql_query with chunksize to read the large result set
+    for chunk_df in pd.read_sql_query(SQL_QUERY, engine, chunksize=CHUNK_SIZE):
+        
+        # --- Apply Python Categorization Logic to the Chunk ---
+        
+        # 1. Strip and lowercase NE NAME
+        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
+        
+        # 2. Apply categorization (Macro/SC)
+        # Note: Keeps your custom rule: or x.startswith('4')
+        chunk_df['category'] = chunk_df['NE NAME'].apply(
+            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
+        )
+        
+        # --- Write Chunk to CSV ---
+        
+        # Write header only for the first chunk
+        chunk_df.to_csv(
+            OUTPUT_FILE, 
+            mode='a', 
+            header=not header_written, 
+            index=False
+        )
+        
+        if not header_written:
+            print(f"First chunk saved and header written.")
+            header_written = True
+        
+    print("\n✅ Data processing complete. All chunks saved to CSV.")
+
+except Exception as e:
+    print(f"\nFATAL ERROR during chunk processing: {e}")
+
