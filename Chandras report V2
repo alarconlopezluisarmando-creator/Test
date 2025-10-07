@@ -1,20 +1,20 @@
-Starting memory-efficient fetch and processing, saving to C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv...
-An error occurred during chunk processing: (pyodbc.ProgrammingError) ('42000', '[42000] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Error converting data type varchar to float. (8114) (SQLExecDirectW)')
-[SQL: 
+# --------------------------------------------------------------------------
+# 1. Define the SQL Query with the JOIN, Custom LTE calculation, and initial filtering
+# --------------------------------------------------------------------------
+
+SQL_QUERY = f"""
 SELECT
     M.*,
     OV.[P:Related ENB IDs],
     OV.[P:Project Site Type],
-    -- Calculate Custom LTE key in SQL:
-    -- This is highly dependent on your market_id structure. 
-    -- Assuming a simple concatenation for demonstration:
-    CAST(M.market_id AS VARCHAR(10)) + RIGHT(CAST(M.NE_ID AS VARCHAR(10)), 3) AS "Custom LTE"
+    -- CORRECTED: Using CONCAT() for safe string joining to avoid float conversion errors
+    CONCAT(CAST(M.market_id AS NVARCHAR(10)), 
+           RIGHT(CAST(M.NE_ID AS NVARCHAR(10)), 3)) AS "Custom LTE"
     
 FROM [RANCOMM].[dbo].[daily_sites_mapping] M
 LEFT JOIN [RANCOMM].[dbo].[OVData] OV
-    ON M.[eNB_ID] = OV.[P:Related ENB IDs] -- Assuming eNB_ID is the correct key, not the derived Custom LTE
-    -- If Custom LTE is the key, you must calculate the P:Related ENB IDs key in SQL first.
+    ON M.[eNB_ID] = OV.[P:Related ENB IDs]
 
 WHERE 
-    M.ne_type IN ('macro_indoor_dist', 'udu_cnf', 'nsb_type')
-]
+    M.ne_type IN ('{CDU30_TYPE}', '{UADPF_TYPE}', '{NSB_TYPE}')
+"""
