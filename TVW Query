@@ -78,3 +78,9 @@ SELECT
     [SortOrder] 
 FROM 
     CombinedData;
+
+
+    qb.[P:Viaero Root ID],
+    qb.[P:Viaero In SEA Scope],
+    v2.[P:Misc Install notes],
+    qb.[C:Site Name (SPMS)],
