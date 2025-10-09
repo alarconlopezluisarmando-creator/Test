@@ -73,6 +73,8 @@ SELECT
     [Velleros Submitted],
     [Velleros Datafill Completed],
     [TVW Submitted],
-    [TVW Approved]
+    [TVW Approved],
+    -- 🚨 THE FIX IS HERE 🚨
+    [SortOrder] 
 FROM 
     CombinedData;
