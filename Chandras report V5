@@ -570,4 +570,39 @@ except Exception as e:
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
 
+Update portion
+
+        # 🛠️ 7. UDU_CNF Category Quick Check (IMPLEMENTATION)
+        is_uadpf = (chunk_df['ne_type'] == UADPF_TYPE)
+        
+        # Define the exclusion condition first
+        # 💡 NEW: Exclude sites where Project Site Type is 'Merge Key Mismatch'
+        is_key_mismatch = (chunk_df['Project Site Type'].astype(str).str.strip() == 'Merge Key Mismatch')
+        
+        # The base condition for applying the logic: must be UADPF AND NOT a merge mismatch
+        uadpf_eligible = is_uadpf & (~is_key_mismatch)
+        
+        # Standardize Project Site Type and Category for comparison/replacement
+        pst_upper = chunk_df['Project Site Type'].astype(str).str.upper()
+        category_upper = chunk_df['category'].astype(str).str.upper()
+
+        # Condition 1: If eligible AND category != Project Site Type, replace category with Project Site Type
+        replace_condition = uadpf_eligible & (category_upper != pst_upper)
+        chunk_df.loc[replace_condition, 'category'] = chunk_df['Project Site Type']
+        
+        # Condition 2: For eligible sites, if Project Site Type is In Building, Small Cell, or oDAS, category becomes SC
+        sc_map_conditions = ['IN BUILDING', 'SMALL CELL', 'ODAS']
+        sc_map_condition = uadpf_eligible & pst_upper.isin(sc_map_conditions)
+        
+        # Apply SC mapping
+        chunk_df.loc[sc_map_condition, 'category'] = 'SC'
+        
+        
+        # 8. Final Columns
+        chunk_df['S// ID'] = chunk_df['Custom LTE'] 
+        
+        output_columns = ['region', 'NE_ID', 'market_id', 'Custom LTE', 'S// ID', 'ne_type', 'NE NAME', 'category', 'Project Site Type']
+        processed_chunks.append(chunk_df[output_columns].copy())
+
+
 
