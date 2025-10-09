@@ -262,3 +262,18 @@ except Exception as e:
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
 
+
+Could you help me to update the columns names with below list:
+CDU30_Total
+CDU30_Macro
+CDU30_SC
+uADPF_Total
+uADPF_Macro
+uADPF_SC
+NSB_Total
+NSB_Macro
+NSB_SC
+NOK_Macro
+NOK_SC
+NOK_Total
+
