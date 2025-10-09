@@ -27,6 +27,12 @@ RT4423-48B	MACRO
 
 Could you help me to update it?
 
+# --- 0. Configuration Variables ---
+# NOTE: Your connection details must be defined here.
+server = 'XXX'
+USERNAME = 'XX'
+PSSWD = 'XXX!'
+DB = 'XXX'
 
 # Define the ne_type values and their correct report names
 CDU30_TYPE = 'macro_indoor_dist' 
