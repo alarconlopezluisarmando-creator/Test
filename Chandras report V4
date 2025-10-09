@@ -264,4 +264,329 @@ except Exception as e:
 finally:
     print("\nData processing attempt complete. Check files and logs for details.")
 
+V3, 
+
+import pandas as pd
+import pyodbc
+import os
+from sqlalchemy import create_engine
+import numpy as np 
+
+# --- 0. Configuration Variables ---
+# NOTE: Your connection details must be defined here.
+server = 'XXX'
+USERNAME = 'XX'
+PSSWD = 'XXX!'
+DB = 'XXX'
+
+# Define the ne_type values and their correct report names
+CDU30_TYPE = 'macro_indoor_dist' 
+UADPF_TYPE = 'udu_cnf'
+NSB_TYPE = 'nsb_type' 
+NE_TYPES_FILTER = [CDU30_TYPE, UADPF_TYPE, NSB_TYPE]
+NE_TYPES_STRING = "', '".join(NE_TYPES_FILTER)
+
+# Define the file path for the output
+TEMP_CSV_PATH = r'C:\Users\l5.lopez\Downloads\00_to delete\raw_data.csv' 
+EXCEL_OUTPUT_FILE = os.path.join(os.path.dirname(TEMP_CSV_PATH), 'raw_data.xlsx')
+CHUNK_SIZE = 50000
+
+# File Path for Mastersitelist
+MASTER_SITELIST_PATH = r'\\netapp\depts\Jannat\SWami\Input\Mastersitelist_XLPT.xlsx' 
+
+# ------------------------------------------------------------------
+# 🛠️ NEW: ORU Code Mapping Dictionary
+ORU_TYPE_MAPPING = {
+    '700/AWS RIU': 'Indoor',
+    '850/PCS RIU': 'Indoor',
+    'CBRS RRH - RT4401-48A': 'MACRO',
+    'RF2216d-D1A': 'Indoor',
+    'RF2217d-D1A': 'Indoor',
+    'RF4402d-D1A': 'MACRO',
+    'RF440d-13A': 'MACRO',
+    'RF4437d-25C': 'MACRO',
+    'RF4439d-25A': 'MACRO',
+    'RF4440d-13A': 'MACRO',
+    'RF4461d-13A': 'MACRO',
+    'RF4801d-25A': 'MACRO',
+    'RFV01U-D1A': 'MACRO',
+    'RFV01U-D2A': 'MACRO',
+    'RHU20 B13/B66': 'Indoor',
+    'RHU20 B2/B5': 'Indoor',
+    'RHU20 B5/B2': 'Indoor',
+    'RT4401-48A': 'MACRO',
+    'RT4423-48A': 'MACRO',
+    'RT4423-48B': 'MACRO',
+}
+
+# 🛠️ NEW FUNCTION: Aggressive ID Normalization (Unchanged)
+def normalize_id(series):
+    """Converts ID series to clean, stripped, integer-based strings."""
+    s = series.astype(str).str.strip()
+    s = s.str.replace(r'\.0$', '', regex=True)
+    s = s.str.replace(r'[^\w]', '', regex=True)
+    return s
+
+# ------------------------------------------------------------------
+# --- 1. Database Connection and Query Setup ---
+try:
+    server_tcp = 'tcp:' + server 
+    connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server_tcp};DATABASE={DB};Encrypt=yes;TrustServerCertificate=yes;UID={USERNAME};PWD={PSSWD}'
+    engine = create_engine(f'mssql+pyodbc:///?odbc_connect={connection_string}', fast_executemany=True)
+except NameError:
+    print("FATAL ERROR: Database connection variables (server, DB, USERNAME, PSSWD) are not defined.")
+    exit()
+
+# --------------------------------------------------------------------------
+# 2. SQL QUERIES 
+MAIN_DATA_QUERY = f"""
+SELECT
+    M.[market_id],
+    M.[NE_ID],
+    M.[ne_type],
+    M.[NE NAME],
+    M.[region]
+FROM [RANCOMM].[dbo].[daily_sites_mapping] M
+WHERE 
+    M.ne_type IN ('{NE_TYPES_STRING}')
+"""
+
+OV_LOOKUP_QUERY = """
+SELECT [P_ENB_ID], [P:Project Site Type] FROM [RANCOMM].[dbo].[OVData]
+"""
+
+VZW_4G_CIQ_MAIN_QUERY = """
+SELECT [Samsung eNB ID] FROM [VZW_SNAP].[dbo].[VZW_4G_CIQ_MAIN]
+"""
+
+# 🛠️ NEW QUERY: VZW UADPF ORU lookup
+UADPF_ORU_QUERY = """
+SELECT [UADPF_NE_ID], [ORU_TYPE] 
+FROM [VZW_SNAP].[dbo].[VZW_UADPF_ORU]
+"""
+
+# --------------------------------------------------------------------------
+# 3. Memory-Efficient Processing
+# --------------------------------------------------------------------------
+
+# Clean up files
+if os.path.exists(TEMP_CSV_PATH): os.remove(TEMP_CSV_PATH)
+if os.path.exists(EXCEL_OUTPUT_FILE):
+    os.remove(EXCEL_OUTPUT_FILE)
+    print(f"Removed existing Excel file: {EXCEL_OUTPUT_FILE}")
+
+sc_conditions = [
+    'sc_od', 'sc_ib', 'das_od', 'das_ib', 'cran_das', 
+    'ib', 'das', 'sc', 'odas' 
+]
+processed_chunks = []
+
+print(f"Starting processing in chunks of {CHUNK_SIZE} rows...")
+
+# --- Load Lookup Tables with Aggressive Normalization ---
+try:
+    # 1. OV Data Lookup
+    df_ov_lookup = pd.read_sql(OV_LOOKUP_QUERY, engine)
+    df_ov_lookup['P_ENB_ID'] = normalize_id(df_ov_lookup['P_ENB_ID'])
+    df_ov_lookup.drop_duplicates(subset=['P_ENB_ID'], keep='first', inplace=True)
+    
+    # 2. VZW CIQ Data Lookup
+    df_vzw = pd.read_sql(VZW_4G_CIQ_MAIN_QUERY, engine)
+    df_vzw['Samsung eNB ID'] = normalize_id(df_vzw['Samsung eNB ID'])
+    vzw_id_set = set(df_vzw['Samsung eNB ID'].unique())
+
+    # 3. MASTER SITELIST Lookup
+    df_master = pd.read_excel(MASTER_SITELIST_PATH, engine='openpyxl')
+    df_master_ids = normalize_id(df_master.iloc[:, 0]) 
+    master_id_set = set(df_master_ids.unique())
+
+    # 🛠️ 4. NEW: VZW UADPF ORU Lookup
+    df_oru = pd.read_sql(UADPF_ORU_QUERY, engine)
+    df_oru['UADPF_NE_ID_Clean'] = normalize_id(df_oru['UADPF_NE_ID'])
+    # Map the ORU_TYPE (e.g., 'RF4402d-D1A') to 'MACRO' or 'Indoor'
+    df_oru['ORU_Classification'] = df_oru['ORU_TYPE'].astype(str).map(ORU_TYPE_MAPPING).fillna('Unknown')
+    # Keep only the essential columns and deduplicate
+    df_oru = df_oru[['UADPF_NE_ID_Clean', 'ORU_Classification']].drop_duplicates(subset=['UADPF_NE_ID_Clean'], keep='first')
+    
+    print(f"   Loaded lookup tables. OV: {len(df_ov_lookup)} records, VZW unique IDs: {len(vzw_id_set)}, Master unique IDs: {len(master_id_set)}, ORU unique IDs: {len(df_oru)}.")
+    
+except Exception as e:
+    print(f"FATAL ERROR: Could not load required lookup tables or file ('{e}'). Check file path/permissions for {MASTER_SITELIST_PATH} or database access for VZW_UADPF_ORU.")
+    exit()
+
+print("Processing main sites data...")
+
+# --- Main Chunking Process ---
+try: 
+    for i, chunk_df in enumerate(pd.read_sql_query(MAIN_DATA_QUERY, engine, chunksize=CHUNK_SIZE)):
+        print(f"   Processing chunk {i+1}...")
+        
+        # 1. Filter out 'GROW_' sites
+        initial_rows = len(chunk_df)
+        chunk_df = chunk_df[~chunk_df['NE NAME'].astype(str).str.upper().str.contains('GROW_', na=False)].copy()
+        rows_removed = initial_rows - len(chunk_df)
+        if rows_removed > 0:
+            print(f"      Removed {rows_removed} rows containing 'GROW_' in NE NAME.")
+        
+        # 2. Initial NE_ID cleaning for lookups
+        chunk_df['NE_ID_Clean'] = normalize_id(chunk_df['NE_ID'])
+        
+        # 3. Key Creation and OVData MERGE (Unchanged)
+        market_id_str = normalize_id(chunk_df['market_id'])
+        chunk_df['Custom LTE'] = market_id_str + chunk_df['NE_ID_Clean'].str.slice(-3)
+        
+        chunk_df = pd.merge(chunk_df, df_ov_lookup, left_on='Custom LTE', right_on='P_ENB_ID', how='left')
+        chunk_df['Project Site Type'] = chunk_df['P:Project Site Type'].fillna('Merge Key Mismatch')
+        chunk_df.drop(columns=['P:Project Site Type', 'P_ENB_ID'], inplace=True, errors='ignore')
+        
+        # 🛠️ 4. UADPF TYPE CLASSIFICATION (NEW LOGIC)
+        # Merge ORU classification data for UADPF sites
+        chunk_df = pd.merge(
+            chunk_df, 
+            df_oru, 
+            left_on='NE_ID_Clean', 
+            right_on='UADPF_NE_ID_Clean', 
+            how='left'
+        )
+        chunk_df.drop(columns=['UADPF_NE_ID_Clean'], inplace=True, errors='ignore')
+
+        # Update ne_type for UADPF sites based on ORU_Classification
+        is_uadpf = (chunk_df['ne_type'] == UADPF_TYPE)
+        is_macro = (chunk_df['ORU_Classification'] == 'MACRO')
+        
+        # Sites that are UADPF and classified as MACRO get a temporary subtype.
+        # This will allow us to split the UADPF sites into Macro/Indoor in the Summary table.
+        chunk_df.loc[is_uadpf & is_macro, 'ne_type'] = 'udu_cnf_macro'
+        
+        # Drop the temp column now that we've used it
+        chunk_df.drop(columns=['ORU_Classification'], inplace=True, errors='ignore')
+        
+        
+        # 5. CONDITIONAL NE_TYPE UPDATE (NSB Classification for CDU30)
+        cdu30_base_condition = (chunk_df['ne_type'] == CDU30_TYPE)
+        cond_not_vzw = ~chunk_df['NE_ID_Clean'].isin(vzw_id_set)
+        cond_not_master = ~chunk_df['NE_ID_Clean'].isin(master_id_set)
+        
+        # The rule: NSB if CDU30 AND (NOT VZW) AND (NOT Master)
+        nsb_condition = cdu30_base_condition & cond_not_vzw & cond_not_master
+        
+        # Apply NSB classification
+        chunk_df.loc[nsb_condition, 'ne_type'] = NSB_TYPE
+
+        # 6. REGIONAL EXCLUSION RULE
+        revert_condition = (chunk_df['ne_type'] == NSB_TYPE) & \
+                           (chunk_df['region'].astype(str).str.upper().isin(['NE', 'UNY']))
+        
+        # Revert them back to MACRO_INDOOR_DIST
+        chunk_df.loc[revert_condition, 'ne_type'] = CDU30_TYPE
+        
+        chunk_df.drop(columns=['NE_ID_Clean'], inplace=True) # Drop temporary column
+
+        # 7. Categorization and Final Columns
+        chunk_df['NE NAME'] = chunk_df['NE NAME'].astype(str).str.strip().str.lower()
+        chunk_df['category'] = chunk_df['NE NAME'].apply(
+            lambda x: 'SC' if any(cond in x for cond in sc_conditions) or x.startswith('4') else 'Macro'
+        )
+        
+        chunk_df['S// ID'] = chunk_df['Custom LTE'] 
+        
+        output_columns = ['region', 'NE_ID', 'market_id', 'Custom LTE', 'S// ID', 'ne_type', 'NE NAME', 'category', 'Project Site Type']
+        processed_chunks.append(chunk_df[output_columns].copy())
+
+    # --- Summary Creation and Excel Export ---
+
+    df_processed = pd.concat(processed_chunks, ignore_index=True)
+
+    # 🛠️ Prepare the DataFrame for Summary Table calculation
+    # We must use a copy to avoid SettingWithCopyWarning
+    df_summary_base = df_processed.copy()
+    
+    # 1. Sites with the temporary 'udu_cnf_macro' are the MACRO UADPFs
+    df_summary_base.loc[df_summary_base['ne_type'] == 'udu_cnf_macro', 'ne_type'] = 'udu_cnf_macro'
+    
+    # 2. All remaining sites with the original UADPF_TYPE are now the INDOOR UADPFs
+    df_summary_base.loc[df_summary_base['ne_type'] == UADPF_TYPE, 'ne_type'] = 'udu_cnf_indoor'
+    
+    # 3. For Raw Data Sheet, revert the temporary types back to the original UADPF_TYPE
+    df_processed['ne_type'] = df_processed['ne_type'].replace({'udu_cnf_macro': UADPF_TYPE})
+    df_processed['ne_type'] = df_processed['ne_type'].replace({'udu_cnf_indoor': UADPF_TYPE}) # This might not be needed if the type wasn't changed, but is safe.
+
+    # Global Deduping (using the original type for consistency)
+    initial_rows = len(df_processed)
+    df_processed.drop_duplicates(
+        subset=['NE_ID', 'market_id', 'ne_type'], 
+        keep='first',
+        inplace=True
+    )
+    if len(df_processed) < initial_rows:
+        print(f"   SUCCESS: Removed {initial_rows - len(df_processed)} duplicate records.")
+    
+    # Check if data is empty after deduping
+    if df_processed.empty:
+        print("\nCRITICAL WARNING: No data processed. The Excel file will contain empty sheets.")
+        summary_table = pd.DataFrame({'Message': ['No data processed.']}, index=['No Data']).set_index('Message')
+    else:
+        # Create and format the summary table using the split types (df_summary_base)
+        summary_table_base = df_summary_base.groupby(['region', 'ne_type', 'category']).size().reset_index(name='count')
+        summary_table = summary_table_base.pivot_table(index='region', columns=['ne_type', 'category'], values='count', aggfunc='sum', fill_value=0)
+        summary_table.columns = [f"{col[0]}_{col[1]}" for col in summary_table.columns]
+
+        # Define the final column order for the summary table
+        final_ne_types = ['macro_indoor_dist', 'udu_cnf_indoor', 'udu_cnf_macro', 'nsb_type']
+        final_cols_order = []
+        
+        for ne_type in final_ne_types:
+            ne_type_short = 'CDU30' if ne_type == 'macro_indoor_dist' else 'uADPF Indoor' if ne_type == 'udu_cnf_indoor' else 'uADPF Macro' if ne_type == 'udu_cnf_macro' else 'NSB'
+            macro_col, sc_col = f"{ne_type}_Macro", f"{ne_type}_SC"
+            total_col = f"{ne_type_short}_Total"
+            
+            summary_table[total_col] = summary_table.get(macro_col, 0) + summary_table.get(sc_col, 0)
+            final_cols_order.extend([col for col in [total_col, macro_col, sc_col] if col in summary_table.columns])
+            
+        if final_cols_order:
+            summary_table = summary_table[final_cols_order]
+        
+        # Calculate row total before merging NOK data
+        summary_table.loc['Total'] = summary_table.drop('Total', errors='ignore').sum()
+
+        # Merge Pending_NOK data
+        pending_nok_path = r'\\netapp\depts\Jannat\SNAP\OV\CIQ BASELINE\Pending_NOK.csv'
+        df_pending_nok = pd.read_csv(pending_nok_path)
+        summary_table = summary_table.reset_index().merge(df_pending_nok[['region', 'Macro', 'SC', 'Total']], 
+                                                          on = 'region', 
+                                                          how='left')
+        summary_table.set_index('region', inplace=True)
+        
+        summary_table = summary_table.rename(columns={
+            'Macro': 'Macro NOK',
+            'SC': 'SC NOK',
+            'Total': 'Total NOK'
+        })
+        summary_table['Total NOK'] = summary_table['Macro NOK'].fillna(0) + summary_table['SC NOK'].fillna(0)
+        final_cols_order.extend(['Macro NOK', 'SC NOK', 'Total NOK'])
+        summary_table = summary_table[final_cols_order]
+        
+        # Update Total row after merge
+        # This requires recalculating the sum of the whole table (excluding the header row)
+        summary_table.loc['Total'] = summary_table.drop('Total', errors='ignore').sum(numeric_only=True)
+        
+        
+    # Save the Excel file
+    print(f"\nSaving final output to {EXCEL_OUTPUT_FILE}...")
+    summary_table = summary_table.replace('', 0).fillna(0)
+    
+    with pd.ExcelWriter(EXCEL_OUTPUT_FILE, engine='xlsxwriter') as writer:
+        df_processed.to_excel(writer, sheet_name='Raw Data', index=False)
+        summary_table.to_excel(writer, sheet_name='Summary Table')
+    print(f"Successfully created '{EXCEL_OUTPUT_FILE}' with two sheets.")
+        
+    print("\n--- Summary Table ---")
+    print(summary_table)
+
+except Exception as e:
+    print(f"\nCRITICAL RUNTIME ERROR: An error occurred during main processing or summary creation: {e}")
+finally:
+    print("\nData processing attempt complete. Check files and logs for details.")
+
+
 
