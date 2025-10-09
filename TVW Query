@@ -1,0 +1,78 @@
+WITH PhaseData AS (
+    SELECT
+        DATENAME(MONTH, v.[V:(F 3340) Tower Construction Start-Finish]) + ' ' +
+        CONVERT(varchar(4), YEAR(v.[V:(F 3340) Tower Construction Start-Finish])) AS [Forecast Construction Month],
+        YEAR(v.[V:(F 3340) Tower Construction Start-Finish]) AS [Year],
+        MONTH(v.[V:(F 3340) Tower Construction Start-Finish]) AS [Month],
+        qb.[P:Viaero Root ID],
+        v2.[V:(A 2870) ACD Submitted to Customer-Finish],
+        v2.[V:(A 2885) Velleros Submitted-Finish],
+        v2.[V:(A 2890) Velleros Datafill Completed-Finish],
+        v2.[V:(A 4400) TVW Submitted to Customer-Finish],
+        v2.[V:(A 4405) TVW Approved by Customer-Finish]
+    FROM
+        [ViaeroDWH].[dbo].[OV_Quickbase] qb
+    INNER JOIN
+        [ViaeroDWH].[dbo].[OV_Project_v2] v2 ON qb.[P:Viaero Root ID] = v2.[P:Viaero Root ID]
+    INNER JOIN
+        [ViaeroDWH].[dbo].[OV_Project] v ON qb.[P:Viaero Root ID] = v.[P:Viaero Root ID]
+    WHERE
+        qb.[P:Viaero Phase] <> 'Pending'
+        AND qb.[P:Viaero In SEA Scope] = 'YES'
+        AND qb.[C:Site Name (SPMS)] <> 'CO-KARVAL'
+        AND v2.[WPK:Work Package Description] <> 'Viaero Trial'
+        AND v.[V:(F 3340) Tower Construction Start-Finish] IS NOT NULL
+),
+AggregatedData AS (
+    SELECT
+        [Forecast Construction Month],
+        [Year],
+        [Month],
+        COUNT([P:Viaero Root ID]) as [Total Sites],
+        SUM(CASE WHEN [V:(A 2870) ACD Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [ACD Submitted],
+        SUM(CASE WHEN [V:(A 2885) Velleros Submitted-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [Velleros Submitted],
+        SUM(CASE WHEN [V:(A 2890) Velleros Datafill Completed-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [Velleros Datafill Completed],
+        SUM(CASE WHEN [V:(A 4400) TVW Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [TVW Submitted],
+        SUM(CASE WHEN [V:(A 4405) TVW Approved by Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [TVW Approved]
+    FROM
+        PhaseData
+    GROUP BY
+        [Forecast Construction Month],
+        [Year],
+        [Month]
+),
+CombinedData AS (
+    SELECT 
+        [Forecast Construction Month],
+        [Total Sites],
+        [ACD Submitted],
+        [Velleros Submitted],
+        [Velleros Datafill Completed],
+        [TVW Submitted],
+        [TVW Approved],
+        CONVERT(varchar(4), [Year]) + RIGHT('00' + CONVERT(varchar(2), [Month]), 2) AS [SortOrder]
+    FROM 
+        AggregatedData
+    UNION ALL
+    SELECT 
+        'Total',
+        SUM([Total Sites]),
+        SUM([ACD Submitted]),
+        SUM([Velleros Submitted]),
+        SUM([Velleros Datafill Completed]),
+        SUM([TVW Submitted]),
+        SUM([TVW Approved]),
+        '999999'
+    FROM 
+        AggregatedData
+)
+SELECT 
+    [Forecast Construction Month],
+    [Total Sites],
+    [ACD Submitted],
+    [Velleros Submitted],
+    [Velleros Datafill Completed],
+    [TVW Submitted],
+    [TVW Approved]
+FROM 
+    CombinedData;
