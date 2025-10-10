@@ -301,3 +301,159 @@ SELECT
     [Ground/Tower]                  -- 🛠️ New column from PhaseData
 FROM
     PhaseData
+
+----V3
+
+WITH PhaseData AS (
+SELECT
+    DATENAME(MONTH, v.[V:(F 3340) Tower Construction Start-Finish]) + ' ' +
+    CONVERT(varchar(4), YEAR(v.[V:(F 3340) Tower Construction Start-Finish])) AS [Forecast Construction Month],
+    YEAR(v.[V:(F 3340) Tower Construction Start-Finish]) AS [Year],
+    MONTH(v.[V:(F 3340) Tower Construction Start-Finish]) AS [Month],
+    qb.[P:Viaero Root ID],
+    qb.[P:Viaero In SEA Scope],
+    v2.[P:Misc Install notes],
+    qb.[C:Site Name (SPMS)],
+    v2.[V:(A 2870) ACD Submitted to Customer-Finish],
+    v2.[V:(A 2885) Velleros Submitted-Finish],
+    v2.[V:(A 2890) Velleros Datafill Completed-Finish],
+    v2.[V:(A 4400) TVW Submitted to Customer-Finish],
+    v2.[V:(A 4405) TVW Approved by Customer-Finish],
+    CONVERT(varchar(4), YEAR(v.[V:(F 3340) Tower Construction Start-Finish])) + RIGHT('00' + CONVERT(varchar(2), MONTH(v.[V:(F 3340) Tower Construction Start-Finish])), 2) AS [SortOrder],
+
+    -- 🛠️ UPDATED COLUMN 1: Month (Now using LIKE '%phrase%')
+    CASE 
+        -- October Conditions (Using LIKE for "contains" logic)
+        WHEN v2.[P:Misc Install notes] LIKE '%NE 1st 18 Sites Tower Cx%'
+          OR v2.[P:Misc Install notes] LIKE '%NE 1st 28 Sites (Ground)%'
+          OR v2.[P:Misc Install notes] LIKE '%NE 2nd 25 Sites (Ground)%'
+          OR v2.[P:Misc Install notes] LIKE '%NE 3rd (Ground)%'
+        THEN 'October'
+        
+        -- November Conditions (Using LIKE)
+        WHEN v2.[P:Misc Install notes] LIKE '%NE Nov Tower%'
+          OR v2.[P:Misc Install notes] LIKE '%NE Nov Ground%'
+        THEN 'November'
+        
+        -- December Conditions (Using LIKE)
+        WHEN v2.[P:Misc Install notes] LIKE '%NE Dec Tower%'
+          OR v2.[P:Misc Install notes] LIKE '%NE Dec Ground%'
+        THEN 'December'
+        
+        ELSE NULL -- Default for sites not matching the specific criteria
+    END AS [Month_Phase],
+
+    -- 🛠️ UPDATED COLUMN 2: Ground/Tower (Simplifies logic since the month check already uses LIKE)
+    CASE
+        -- Check if any of the month conditions are met (using LIKE)
+        WHEN 
+             (v2.[P:Misc Install notes] LIKE '%NE 1st 18 Sites Tower Cx%' OR v2.[P:Misc Install notes] LIKE '%NE 1st 28 Sites (Ground)%' OR v2.[P:Misc Install notes] LIKE '%NE 2nd 25 Sites (Ground)%' OR v2.[P:Misc Install notes] LIKE '%NE 3rd (Ground)%')
+          OR (v2.[P:Misc Install notes] LIKE '%NE Nov Tower%' OR v2.[P:Misc Install notes] LIKE '%NE Nov Ground%')
+          OR (v2.[P:Misc Install notes] LIKE '%NE Dec Tower%' OR v2.[P:Misc Install notes] LIKE '%NE Dec Ground%')
+        THEN 
+            CASE
+                -- Classify as Tower or Ground based on the presence of the word
+                WHEN v2.[P:Misc Install notes] LIKE '%Tower%' THEN 'Tower'
+                WHEN v2.[P:Misc Install notes] LIKE '%Ground%' THEN 'Ground'
+                ELSE NULL
+            END
+        
+        ELSE NULL
+    END AS [Ground/Tower]
+
+FROM
+    [ViaeroDWH].[dbo].[OV_Quickbase] qb
+INNER JOIN
+    [ViaeroDWH].[dbo].[OV_Project_v2] v2 ON qb.[P:Viaero Root ID] = v2.[P:Viaero Root ID]
+INNER JOIN
+    [ViaeroDWH].[dbo].[OV_Project] v ON qb.[P:Viaero Root ID] = v.[P:Viaero Root ID]
+WHERE
+    qb.[P:Viaero Phase] <> 'Pending'
+    AND qb.[P:Viaero In SEA Scope] = 'YES'
+    AND qb.[C:Site Name (SPMS)] <> 'CO-KARVAL'
+    AND v2.[WPK:Work Package Description] <> 'Viaero Trial'
+    AND v.[V:(F 3340) Tower Construction Start-Finish] IS NOT NULL
+),
+AggregatedTotals AS (
+SELECT
+    [Forecast Construction Month],
+    COUNT([P:Viaero Root ID]) as [Total Sites],
+    SUM(CASE WHEN [V:(A 2870) ACD Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [ACD Submitted],
+    SUM(CASE WHEN [V:(A 2885) Velleros Submitted-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [Velleros Submitted],
+    SUM(CASE WHEN [V:(A 2890) Velleros Datafill Completed-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [Velleros Datafill Completed],
+    SUM(CASE WHEN [V:(A 4400) TVW Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [TVW Submitted],
+    SUM(CASE WHEN [V:(A 4405) TVW Approved by Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END) as [TVW Approved],
+    [SortOrder]
+FROM
+    PhaseData
+GROUP BY
+    [Forecast Construction Month], [SortOrder]
+)
+SELECT
+    [Forecast Construction Month],
+    [SortOrder],
+    [Total Sites],
+    [ACD Submitted],
+    [Velleros Submitted],
+    [Velleros Datafill Completed],
+    [TVW Submitted],
+    [TVW Approved],
+    NULL AS [P:Viaero Root ID],
+    NULL AS [P:Viaero In SEA Scope],
+    NULL AS [P:Misc Install notes],
+    NULL AS [C:Site Name (SPMS)],
+    NULL AS [V:(A 2870) ACD Submitted to Customer-Finish],
+    NULL AS [V:(A 2885) Velleros Submitted-Finish],
+    NULL AS [V:(A 2890) Velleros Datafill Completed-Finish],
+    NULL AS [V:(A 4400) TVW Submitted to Customer-Finish],
+    NULL AS [V:(A 4405) TVW Approved by Customer-Finish],
+    NULL AS [Month_Phase],
+    NULL AS [Ground/Tower]
+FROM
+    AggregatedTotals
+UNION ALL
+SELECT
+    'Total' AS [Forecast Construction Month],
+    '999999' AS [SortOrder],
+    SUM([Total Sites]),
+    SUM([ACD Submitted]),
+    SUM([Velleros Submitted]),
+    SUM([Velleros Datafill Completed]),
+    SUM([TVW Submitted]),
+    SUM([TVW Approved]),
+    NULL AS [P:Viaero Root ID],
+    NULL AS [P:Viaero In SEA Scope],
+    NULL AS [P:Misc Install notes],
+    NULL AS [C:Site Name (SPMS)],
+    NULL AS [V:(A 2870) ACD Submitted to Customer-Finish],
+    NULL AS [V:(A 2885) Velleros Submitted-Finish],
+    NULL AS [V:(A 2890) Velleros Datafill Completed-Finish],
+    NULL AS [V:(A 4400) TVW Submitted to Customer-Finish],
+    NULL AS [V:(A 4405) TVW Approved by Customer-Finish],
+    NULL AS [Month_Phase],
+    NULL AS [Ground/Tower]
+FROM
+    AggregatedTotals
+UNION ALL
+SELECT
+    [Forecast Construction Month],
+    [SortOrder],
+    1 AS [Total Sites],
+    CASE WHEN [V:(A 2870) ACD Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END AS [ACD Submitted],
+    CASE WHEN [V:(A 2885) Velleros Submitted-Finish] IS NOT NULL THEN 1 ELSE 0 END AS [Velleros Submitted],
+    CASE WHEN [V:(A 2890) Velleros Datafill Completed-Finish] IS NOT NULL THEN 1 ELSE 0 END AS [Velleros Datafill Completed],
+    CASE WHEN [V:(A 4400) TVW Submitted to Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END AS [TVW Submitted],
+    CASE WHEN [V:(A 4405) TVW Approved by Customer-Finish] IS NOT NULL THEN 1 ELSE 0 END AS [TVW Approved],
+    [P:Viaero Root ID],
+    [P:Viaero In SEA Scope],
+    [P:Misc Install notes],
+    [C:Site Name (SPMS)],
+    [V:(A 2870) ACD Submitted to Customer-Finish],
+    [V:(A 2885) Velleros Submitted-Finish],
+    [V:(A 2890) Velleros Datafill Completed-Finish],
+    [V:(A 4400) TVW Submitted to Customer-Finish],
+    [V:(A 4405) TVW Approved by Customer-Finish],
+    [Month_Phase],
+    [Ground/Tower]
+FROM
+    PhaseData
