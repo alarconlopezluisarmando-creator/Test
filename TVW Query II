@@ -1,3 +1,19 @@
+Using below query, I need to create two columns with this column [P:Misc Install notes].
+1. One column is going to call: Month (According with For)
+  Could be October, November and December. 
+2. Second column is going to call: Ground/Tower. 
+If [P:Misc Install notes]contains “NE 1st 18 Sites Tower Cx”,“NE 1st 28 Sites (Ground)”,“NE 2nd 25 Sites (Ground)",“NE 3rd (Ground)” The column Month will be October, and if 
+[P:Misc Install notes] contains "Ground", Ground/Tower will be Ground if contain Tower, will be tower. 
+For November these are the conditions: "NE Nov Tower” and “NE Nov Ground”
+For Decembere these are the conditions: "NE Dec Tower” and “NE Dec Ground”
+The column going to be something like:
+Month 	Ground/Tower
+October	Ground
+November	Tower
+December	Ground
+
+Please dont do any change for the rest of the columns. 
+
 WITH PhaseData AS (
 SELECT
 DATENAME(MONTH, v.[V:(F 3340) Tower Construction Start-Finish]) + ' ' +
