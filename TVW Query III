@@ -151,3 +151,6 @@ SELECT
     [Ground/Tower]
 FROM
     PhaseData
+
+
+NE 1st 18 Sites Tower Cx; NE 2nd 25 Sites (Ground)
