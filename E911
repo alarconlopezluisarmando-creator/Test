@@ -168,15 +168,4 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
             'Redline Notes': 'QT_QB_RED_LINE_NOTES'
         })
         
-        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
-        output_file_name = f"QB_E911_{timestamp}.xlsx"
-        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
-        df_output.to_excel(output_path, index=False)
-        print(f"Final Discrepancy Report saved to: {output_path}")
-        
-        sftp_host = '54.225.75.239'
-        sftp_port = 22
-        sftp_username = 'sea2_es'
-        sftp_password = 'M5v3WV3ThaG9'
-        sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/'
-        upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+
