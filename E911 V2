@@ -384,3 +384,10 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         print("✅ No differences found. No report generated.")
 
 
+
+--- Starting comparison between E911_Report_2025-10-14_14-33-24.csv and E911_Daily_202510141222_53452.xlsx ---
+UTF-8 decode failed for E911_Report_2025-10-14_14-33-24.csv. Trying 'latin-1'...
+--- Roles: E911_Report_2025-10-14_14-33-24.csv is OLD (CSV), E911_Daily_202510141222_53452.xlsx is NEW (Excel) ---
+Error: Required merge key column 'P:Viaero Root ID' is missing from the OLD (CSV) file.
+
+
