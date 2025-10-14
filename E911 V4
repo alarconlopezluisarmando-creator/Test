@@ -2,16 +2,18 @@ import pandas as pd
 import os
 from datetime import datetime
 
-# --- IMPORTANT ASSUMPTIONS BASED ON THE MAPPING TABLE & YOUR NEW REQUIREMENT ---
+# --- IMPORTANT ASSUMPTIONS BASED ON THE MAPPING TABLE & YOUR REQUIREMENTS ---
 # 1. E911_Daily_ (OLD/Excel) uses 'P:Viaero Root ID' as the key.
 # 2. E911_Report_ (NEW/CSV) uses 'Site #' as the key.
-# 3. Project ID must come from the OLD/Daily file.
+# 3. Project ID must come from the OLD/Daily file (VLOOKUP logic).
+# 4. FCC Location ID, Site #, and Site Name must be excluded from the final output.
 
 def process_e911_discrepancy_report(file_path_1, file_path_2):
     """
     Compares two E911 files, identifies discrepancies, and outputs a report 
-    populated with the NEW/CORRECT data for updates. Project ID is now sourced 
-    from the OLD (Excel) file via the merge key (Site #).
+    populated with the NEW/CORRECT data for updates. Project ID is sourced 
+    from the OLD (Excel) file. The columns FCC Location ID, Site #, and Site Name
+    are excluded from the final output.
 
     Args:
         file_path_1 (str): Path to the first file (either Daily/OLD or Report/NEW).
@@ -19,18 +21,28 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     """
     print(f"\n--- Starting comparison between {os.path.basename(file_path_1)} and {os.path.basename(file_path_2)} ---")
     
-    # 1. Define Column Mapping and Keys (UPDATED for Project ID source)
+    # 1. Define Column Mapping and Keys (UPDATED to exclude output names)
     
     DAILY_KEY_HEADER = 'P:Viaero Root ID'
     REPORT_KEY_HEADER = 'Site #'
     
+    # Placeholder for columns to be removed from final output, set 'Output_Col' to None
+    COLUMNS_TO_EXCLUDE_FROM_OUTPUT = {
+        'P:FCC Site ID Number': {'Output_Col_Name': 'FCC Location ID'},
+        DAILY_KEY_HEADER: {'Output_Col_Name': 'Site #'},
+        'P:Viaero Site Name': {'Output_Col_Name': 'Site Name'}
+    }
+    
     COLUMN_MAP = {
         # Old (Excel) Header (Daily Header) : {New (CSV) Header (Report Header), Final Output Name}
-        # NOTE: E911_Report_Col for Project ID is now 'Project ID' from the Daily file.
-        'P:Project ID': {'E911_Report_Col': 'P:Project ID', 'Output_Col': 'Project ID'}, # P:Project ID from Daily, but we will reference the merged Daily column.
-        'P:FCC Site ID Number': {'E911_Report_Col': 'FCC Location ID', 'Output_Col': 'FCC Location ID'},
-        DAILY_KEY_HEADER: {'E911_Report_Col': REPORT_KEY_HEADER, 'Output_Col': 'Site #'}, 
-        'P:Viaero Site Name': {'E911_Report_Col': 'Site Name', 'Output_Col': 'Site Name'}, 
+        'P:Project ID': {'E911_Report_Col': 'P:Project ID', 'Output_Col': 'Project ID'}, # Source is OLD/Daily
+        
+        # Core Keys (Needed for Merge and Comparison, but Output_Col is None/Excluded)
+        'P:FCC Site ID Number': {'E911_Report_Col': 'FCC Location ID', 'Output_Col': None}, # EXCLUDED
+        DAILY_KEY_HEADER: {'E911_Report_Col': REPORT_KEY_HEADER, 'Output_Col': None},       # EXCLUDED
+        'P:Viaero Site Name': {'E911_Report_Col': 'Site Name', 'Output_Col': None},         # EXCLUDED
+
+        # Data Columns (Sourced from NEW/Report)
         'P:TVW estimated ready/rough forecast date (QB)': {'E911_Report_Col': 'TVW estimated ready/rough forecast date:', 'Output_Col': 'P_TVW_EST_READY_FORE_QB'},
         'P:911 TVW - Blank (QB)': {'E911_Report_Col': '911 TVW - Blank', 'Output_Col': 'P_911_TVW__BLANK_QB'},
         'P:911 TVW - Complete (QB)': {'E911_Report_Col': '911 TVW - Complete', 'Output_Col': 'P_911_TVW__COMPLETE_QB'},
@@ -49,7 +61,7 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         'P:Grant Site (QB)': {'E911_Report_Col': 'Grant Site', 'Output_Col': 'P_GRANT_SITE_QB'}
     }
 
-    # Columns used for discrepancy check (OLD data headers from Excel/Daily)
+    # Columns used for discrepancy check (These are still necessary!)
     COMPARISON_COLS = [
         'P:TVW estimated ready/rough forecast date (QB)', 'P:911 TVW - Blank (QB)',
         'P:911 TVW - Complete (QB)', 'P:PSAP E-911 CURRENT STATUS (QB)',
@@ -58,14 +70,13 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     ]
 
     daily_cols = list(COLUMN_MAP.keys())
+    
+    # Generate the final output order, excluding columns where 'Output_Col' is None
     output_cols_final_order = [
-        'Project ID', 'FCC Location ID', 'Site #', 'Site Name',
-        'P_TVW_EST_READY_FORE_QB', 'P_911_TVW__BLANK_QB', 'P_911_TVW__COMPLETE_QB',
-        'P_PSAP__FCC_ID_QB', 'P_PSAP_NAME_QB', 'P_PSAP_E911_CURRENT_STATUS_QB',
-        'P_PSAP_FCC_ID__PSAP_ADM_PHON', 'P_TOWER_TYPE_QB', 'P_BUILDING_CABINET_QB',
-        'P_RR_SITE', 'P_SAMSUNG_OPTO_CLUSTER_QB', 'P_ESTIMATED_BUILD_YEAR_QB',
-        'P_TOWER_ONLINE_QB', 'P_TOWER_ONLINE_DATE_QB', 'P_CAFII_SITE_QB',
-        'P_GRANT_SITE_QB'
+        'Project ID'
+    ] + [
+        map_details['Output_Col'] for map_details in COLUMN_MAP.values() 
+        if map_details['Output_Col'] is not None and map_details['Output_Col'] != 'Project ID'
     ]
     
     MERGE_KEY_COL = 'STANDARDIZED_SITE_ID' 
@@ -115,12 +126,10 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     # 3. Data Preparation and Standardization on the Merge Key (UNCHANGED logic)
     if DAILY_KEY_HEADER not in df_daily.columns:
         print(f"Error: Required merge key column '{DAILY_KEY_HEADER}' is missing from the OLD (Excel) file.")
-        print(f"Available columns in OLD file: {list(df_daily.columns)}")
         return
     
     if REPORT_KEY_HEADER not in df_report.columns:
         print(f"Error: Required merge key column '{REPORT_KEY_HEADER}' is missing from the NEW (CSV) file.")
-        print(f"Available columns in NEW file: {list(df_report.columns)}")
         print("Please ensure the column names match the map exactly.")
         return
             
@@ -128,22 +137,17 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     df_daily[MERGE_KEY_COL] = df_daily[DAILY_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
     df_report[MERGE_KEY_COL] = df_report[REPORT_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
 
-    # 4. Select and Rename Columns for Merging (UPDATED: Ensure P:Project ID is included and renamed)
+    # 4. Select and Rename Columns for Merging (UNCHANGED logic)
     daily_rename_map = {col: f"{col}_daily" for col in daily_cols}
-    # Explicitly include P:Project ID even if it's not a comparison column
     daily_final_cols = [col for col in daily_cols if col in df_daily.columns]
     
     df_daily_subset = df_daily[daily_final_cols + [MERGE_KEY_COL]].copy()
     df_daily_subset.rename(columns=daily_rename_map, inplace=True)
     
     # Report columns (Right side) used for comparison AND output selection
-    # We must exclude the 'P:Project ID' Report column from selection as we are using the Daily one
-    report_relevant_cols = list(set(col_map['E911_Report_Col'] for daily_col, col_map in COLUMN_MAP.items() if daily_col != 'P:Project ID'))
+    report_relevant_cols = list(set(col_map['E911_Report_Col'] for col_map in COLUMN_MAP.values()))
     
     report_cols_present = [col for col in df_report.columns if col in report_relevant_cols]
-    missing_report_cols = [col for col in report_relevant_cols if col not in df_report.columns]
-    if missing_report_cols:
-         print(f"Warning: The following NEW/Report columns are missing and will be skipped: {missing_report_cols}")
     
     df_report_subset = df_report[report_cols_present + [MERGE_KEY_COL]].copy()
     
@@ -155,12 +159,11 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         how='left'
     )
 
-    # 6. Discrepancy Finding Logic (UNCHANGED logic, uses new COMPARISON_COLS)
+    # 6. Discrepancy Finding Logic (UNCHANGED)
     daily_comp_cols = [f"{col}_daily" for col in COMPARISON_COLS]
     
     daily_comp_cols_present = [col for col in daily_comp_cols if col in merged_df.columns]
     
-    # Find the corresponding NEW/Report headers for the daily comparison columns
     report_comp_cols_present = []
     for daily_header in daily_comp_cols_present:
         original_daily_header = daily_header.replace('_daily', '')
@@ -168,8 +171,11 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
              report_header = COLUMN_MAP[original_daily_header]['E911_Report_Col']
              if report_header in merged_df.columns:
                  report_comp_cols_present.append(report_header)
-             else:
-                 print(f"Warning: Corresponding Report column '{report_header}' for '{daily_header}' is missing in merged data.")
+             # Note: P:FCC Site ID Number and P:Viaero Site Name are compared, 
+             # and their report headers are in report_relevant_cols, so they are included here.
+        elif original_daily_header == 'P:Project ID':
+            # Project ID is not used for comparison, so skip it here
+            pass
 
     merged_df['daily_concat'] = merged_df[daily_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
     merged_df['report_concat'] = merged_df[report_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
@@ -182,17 +188,17 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     
     print(f"Found {len(df_diff)} discrepancies.")
 
-    # 7. Final Output Generation and Renaming (KEY CHANGE HERE)
+    # 7. Final Output Generation and Renaming (ADJUSTED for exclusion)
     if not df_diff.empty:
         
-        # All columns except Project ID are sourced from the NEW/Report file
-        # We start by preparing the Report data
+        # Prepare the map for columns that ARE NOT EXCLUDED
         output_source_map = {}
         for daily_col, map_details in COLUMN_MAP.items():
-            if daily_col != 'P:Project ID':
+            if map_details['Output_Col'] is not None and map_details['Output_Col'] != 'Project ID':
+                # Map NEW/Report header to Final Output header
                 output_source_map[map_details['E911_Report_Col']] = map_details['Output_Col']
         
-        # Select Report-sourced columns
+        # Select Report-sourced columns that are not excluded
         cols_to_select_report = list(output_source_map.keys())
         cols_to_select_present = [col for col in cols_to_select_report if col in df_diff.columns]
         
@@ -203,7 +209,6 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         df_output.rename(columns=present_rename_map, inplace=True)
         
         # --- PROJECT ID LOGIC: VLOOKUP from OLD/Daily file ---
-        # The 'P:Project ID' column from the Daily file was renamed to 'P:Project ID_daily' during the merge.
         DAILY_PROJECT_ID_COL = 'P:Project ID_daily'
         
         if DAILY_PROJECT_ID_COL in df_diff.columns:
@@ -214,7 +219,7 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
             df_output.insert(0, 'Project ID', None)
         # ---------------------------------------------------
 
-        # Re-align columns to the final desired order
+        # Re-align columns to the final desired order (which now excludes the 3 columns)
         final_cols_for_output = [col for col in output_cols_final_order if col in df_output.columns]
         df_output = df_output[final_cols_for_output]
 
