@@ -1,0 +1,198 @@
+import pandas as pd
+import os
+from datetime import datetime
+
+# NOTE: The 'upload_file_to_sftp' function is assumed to be defined elsewhere.
+
+def process_e911_discrepancy_report(file_path_1, file_path_2):
+    """
+    Compares two E911 files, identifies discrepancies, and outputs a report 
+    populated with the NEW/CORRECT data for updates. Project ID is exclusively 
+    sourced from the NEW (CSV) file.
+
+    Args:
+        file_path_1 (str): Path to the first file (either Daily/OLD or Report/NEW).
+        file_path_2 (str): Path to the second file (either Daily/OLD or Report/NEW).
+    """
+    print(f"\n--- Starting comparison between {os.path.basename(file_path_1)} and {os.path.basename(file_path_2)} ---")
+    
+    # 1. Define Column Mapping and Keys
+    
+    # OLD (Excel) file uses Daily's keys (P:Viaero Root ID)
+    DAILY_KEY_HEADER = 'P:Viaero Root ID'
+    # NEW (CSV) file uses Report's keys (Site #)
+    REPORT_KEY_HEADER = 'Site #'
+    
+    # NOTE: The keys in the COLUMN_MAP must reflect the headers in the OLD (Excel) file.
+    # The E911_Report_Col must reflect the headers in the NEW (CSV) file.
+    
+    COLUMN_MAP = {
+        # Old (Excel) Header (Daily Header) : {New (CSV) Header (Report Header), Final Output Name}
+        'P:Project ID': {'E911_Report_Col': 'Project ID', 'Output_Col': 'Project ID'}, 
+        'P:FCC Site ID Number': {'E911_Report_Col': 'FCC Location ID', 'Output_Col': 'FCC Site ID'},
+        DAILY_KEY_HEADER: {'E911_Report_Col': REPORT_KEY_HEADER, 'Output_Col': 'Viaero Root ID'}, 
+        'P:Viaero Site Name': {'E911_Report_Col': 'Site Name', 'Output_Col': 'Viaero Site Name'},
+        'P:TVW estimated ready/rough forecast date (QB)': {'E911_Report_Col': 'TVW estimated ready/rough forecast date:', 'Output_Col': 'P_TVW_EST_READY_FORE_QB'},
+        'P:911 TVW - Blank (QB)': {'E911_Report_Col': '911 TVW - Blank', 'Output_Col': 'P_911_TVW__BLANK_QB'},
+        'P:911 TVW - Complete (QB)': {'E911_Report_Col': '911 TVW - Complete', 'Output_Col': 'P_911_TVW__COMPLETE_QB'},
+        'P:PSAP - FCC ID (QB)': {'E911_Report_Col': 'PSAP - FCC ID', 'Output_Col': 'P_PSAP__FCC_ID_QB'},
+        'P:PSAP NAME (QB)': {'E911_Report_Col': 'PSAP NAME', 'Output_Col': 'P_PSAP_NAME_QB'},
+        'P:PSAP E-911 CURRENT STATUS (QB)': {'E911_Report_Col': 'PSAP E-911 CURRENT STATUS', 'Output_Col': 'P_PSAP_E911_CURRENT_STATUS_QB'},
+        'P:PSAP - FCC ID - PSAP ADMIN phone# (non-emergency) (QB)': {'E911_Report_Col': 'PSAP - FCC ID - PSAP ADMIN phone# (non-emergency)', 'Output_Col': 'P_PSAP_FCC_ID__PSAP_ADM_PHON'},
+        'P:Tower Type (QB)': {'E911_Report_Col': 'Tower Type', 'Output_Col': 'P_TOWER_TYPE_QB'},
+        'P:Building/Cabinet (QB)': {'E911_Report_Col': 'Building/Cabinet', 'Output_Col': 'P_BUILDING_CABINET_QB'},
+        'P:FRN Cluster ID': {'E911_Report_Col': 'FRN Number', 'Output_Col': 'FRN Cluster ID'},
+        'P:Samsung Opto Cluster (QB)': {'E911_Report_Col': 'Samsung Opto Cluster', 'Output_Col': 'P_SAMSUNG_OPTO_CLUSTER_QB'},
+        'P:ESTIMATED BUILD YEAR (QB)': {'E911_Report_Col': 'ESTIMATED BUILD YEAR', 'Output_Col': 'P_ESTIMATED_BUILD_YEAR_QB'},
+        'P:Tower Online (QB)': {'E911_Report_Col': 'Tower Online', 'Output_Col': 'P_TOWER_ONLINE_QB'},
+        'P:Tower Online Date (QB)': {'E911_Report_Col': 'Tower Online Date', 'Output_Col': 'P_TOWER_ONLINE_DATE_QB'},
+        'P:CAF-II site? (QB)': {'E911_Report_Col': 'CAF-II site?', 'Output_Col': 'P_CAFII_SITE_QB'},
+        'P:Grant Site (QB)': {'E911_Report_Col': 'Grant Site', 'Output_Col': 'P_GRANT_SITE_QB'}
+    }
+
+    # Columns used for discrepancy check (OLD data headers from Excel/Daily)
+    COMPARISON_COLS = [
+        'P:TVW estimated ready/rough forecast date (QB)', 'P:911 TVW - Blank (QB)',
+        'P:911 TVW - Complete (QB)', 'P:PSAP E-911 CURRENT STATUS (QB)',
+        'P:Tower Online (QB)', 'P:Tower Online Date (QB)'
+    ]
+
+    daily_cols = list(COLUMN_MAP.keys())
+    output_cols_final_order = [v['Output_Col'] for v in COLUMN_MAP.values()]
+    MERGE_KEY_COL = 'STANDARDIZED_SITE_ID' 
+    
+    # 2. File Reading & Role Assignment (MODIFIED)
+    df_daily = None
+    df_report = None
+    
+    def read_robust_csv(path):
+        try:
+            return pd.read_csv(path)
+        except UnicodeDecodeError:
+            try:
+                print(f"UTF-8 decode failed for {os.path.basename(path)}. Trying 'latin-1'...")
+                return pd.read_csv(path, encoding='latin-1')
+            except Exception:
+                print(f"Latin-1 decode failed for {os.path.basename(path)}. Trying 'cp1252'...")
+                return pd.read_csv(path, encoding='cp1252')
+    
+    try:
+        # Check based on your new instruction: .csv is NEW, .xlsx is OLD
+        if file_path_1.lower().endswith('.csv') and file_path_2.lower().endswith(('.xlsx', '.xls')):
+            df_report = read_robust_csv(file_path_1)  # CSV is NEW
+            df_daily = pd.read_excel(file_path_2, engine='openpyxl') # Excel is OLD
+            print(f"--- Roles: {os.path.basename(file_path_2)} is OLD (Excel), {os.path.basename(file_path_1)} is NEW (CSV) ---")
+            
+        elif file_path_2.lower().endswith('.csv') and file_path_1.lower().endswith(('.xlsx', '.xls')):
+            df_report = read_robust_csv(file_path_2) # CSV is NEW
+            df_daily = pd.read_excel(file_path_1, engine='openpyxl') # Excel is OLD
+            print(f"--- Roles: {os.path.basename(file_path_1)} is OLD (Excel), {os.path.basename(file_path_2)} is NEW (CSV) ---")
+            
+        else:
+            print("Error: Could not determine file roles. Expecting one CSV (NEW) and one Excel (OLD) file.")
+            return
+
+    except FileNotFoundError as e:
+        print(f"Error: One of the files was not found. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names by stripping whitespace
+    df_daily.columns = df_daily.columns.str.strip()
+    df_report.columns = df_report.columns.str.strip()
+
+    # 3. Data Preparation and Standardization on the Merge Key (UNCHANGED logic, but headers are new)
+    if DAILY_KEY_HEADER not in df_daily.columns:
+        print(f"Error: Required merge key column '{DAILY_KEY_HEADER}' is missing from the OLD (Excel) file.")
+        print(f"Available columns in OLD file: {list(df_daily.columns)}")
+        return
+    
+    if REPORT_KEY_HEADER not in df_report.columns:
+        print(f"Error: Required merge key column '{REPORT_KEY_HEADER}' is missing from the NEW (CSV) file.")
+        print(f"Available columns in NEW file: {list(df_report.columns)}")
+        print("Please ensure the column names match the map exactly.")
+        return
+            
+    # ZERO-PADDING FIX (Site # on the NEW/Report file)
+    df_daily[MERGE_KEY_COL] = df_daily[DAILY_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
+    df_report[MERGE_KEY_COL] = df_report[REPORT_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
+
+    # 4. Select and Rename Columns for Merging (ADJUSTED: Project ID only in NEW)
+    daily_rename_map = {col: f"{col}_daily" for col in daily_cols}
+    daily_final_cols = [col for col in daily_cols if col in df_daily.columns]
+    df_daily_subset = df_daily[daily_final_cols + [MERGE_KEY_COL]].copy()
+    df_daily_subset.rename(columns=daily_rename_map, inplace=True)
+    
+    # Report columns (Right side) used for comparison AND output selection
+    # NOTE: Since the Project ID value is *only* needed from the NEW file for the output, 
+    # and not for comparison, we don't need to worry about excluding it here.
+    report_relevant_cols = list(set(col_map['E911_Report_Col'] for col_map in COLUMN_MAP.values()))
+    
+    df_report_subset = df_report[[col for col in df_report.columns if col in report_relevant_cols] + [MERGE_KEY_COL]].copy()
+    
+    # 5. Merge the DataFrames (Left Merge)
+    merged_df = pd.merge(
+        df_daily_subset,
+        df_report_subset,
+        on=MERGE_KEY_COL, 
+        how='left'
+    )
+
+    # 6. Discrepancy Finding Logic
+    daily_comp_cols = [f"{col}_daily" for col in COMPARISON_COLS]
+    report_comp_cols = [COLUMN_MAP[col]['E911_Report_Col'] for col in COMPARISON_COLS]
+    
+    # Safely get comparison columns that actually exist
+    daily_comp_cols_present = [col for col in daily_comp_cols if col in merged_df.columns]
+    report_comp_cols_present = [col for col in report_comp_cols if col in merged_df.columns]
+
+    merged_df['daily_concat'] = merged_df[daily_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
+    merged_df['report_concat'] = merged_df[report_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
+
+    # Check for two conditions: 1) Discrepancy in comparison fields OR 2) Missing Site in Report (NEW) file
+    df_diff = merged_df[
+        (merged_df['daily_concat'] != merged_df['report_concat']) |
+        (merged_df[REPORT_KEY_HEADER].isna()) # Check if the NEW file's key is NaN (meaning record only exists in OLD)
+    ].copy()
+    
+    print(f"Found {len(df_diff)} discrepancies.")
+
+    # 7. Final Output Generation and Renaming (FIXED for NEW Data Source)
+    if not df_diff.empty:
+        
+        output_source_map = {}
+        for daily_col, map_details in COLUMN_MAP.items():
+            output_col = map_details['Output_Col']
+            report_col = map_details['E911_Report_Col']
+            
+            # --- Project ID FIX ---
+            if report_col == 'Project ID':
+                # The Project ID value is ONLY needed from the NEW file, which is the 'Project ID' column
+                output_source_map[report_col] = output_col
+                
+            else:
+                # All other columns (including the key/Viaero Root ID) come from the NEW file.
+                output_source_map[report_col] = output_col
+
+        cols_to_select = [col for col in output_source_map.keys() if col in df_diff.columns]
+        
+        df_output = df_diff[cols_to_select].copy()
+        
+        # Apply the final rename map
+        df_output.rename(columns=output_source_map, inplace=True)
+        
+        # Ensure the columns are in the correct final order
+        df_output = df_output[output_cols_final_order]
+
+        # Output File Generation
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_E911_{timestamp}.xlsx" 
+        output_path = os.path.join(os.path.dirname(os.path.abspath(file_path_1)), output_file_name) 
+        
+        df_output.to_excel(output_path, index=False)
+        print(f"✅ Final New Data Report saved to: {output_path} (Populated with E911_Report/NEW data)")
+        
+    else:
+        print("✅ No differences found. No report generated.")
