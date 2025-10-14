@@ -1010,3 +1010,47 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         
     else:
         print("✅ No differences found. No report generated.")
+==Update piont 7
+
+# ... (rest of the function is the same)
+
+    # 7. Final Output Generation and Renaming (Populated by NEW Data)
+    if not df_diff.empty:
+        
+        output_source_map = {}
+        for daily_col, map_details in COLUMN_MAP.items():
+            output_col = map_details['Output_Col']
+            report_col = map_details['E911_Report_Col']
+            
+            # --- CRITICAL FIX HERE ---
+            # Project ID (the only column from OLD) comes from the suffixed column.
+            if daily_col == 'Project ID':
+                # We need to explicitly use the key of the report column (which holds the P:Project ID header)
+                # to get the correct suffixed column name from the merge.
+                
+                # Check if the Report (NEW) column header has the P: prefix, and use that as the base for the OLD column.
+                if report_col.startswith('P:'):
+                    old_suffixed_col = f"{report_col}_daily"
+                else:
+                    old_suffixed_col = f"{daily_col}_daily"
+                    
+                # The Project ID column in the merged DF must be named 'P:Project ID_daily'
+                output_source_map[old_suffixed_col] = output_col
+                
+            else:
+                # All other columns, including the key, come from the NEW file.
+                output_source_map[report_col] = output_col
+
+        cols_to_select = list(output_source_map.keys())
+        
+        # Check if the missing column is in the df_diff index before proceeding
+        missing_cols = [col for col in cols_to_select if col not in df_diff.columns]
+        if missing_cols:
+             print(f"FATAL ERROR: The following expected column(s) are missing from the merged data: {missing_cols}")
+             print("Please double-check the column names in both source files against the COLUMN_MAP.")
+             return
+        
+        df_output = df_diff[cols_to_select].copy()
+        
+# ... (rest of the function is the same)
+
