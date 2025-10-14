@@ -401,9 +401,9 @@ from datetime import datetime
 
 def process_e911_discrepancy_report(file_path_1, file_path_2):
     """
-    Compares E911_Daily_ (Old) and E911_Report_ (New) files, identifies 
-    discrepancies, and outputs a report populated with the 
-    NEW/CORRECT data from the E911_Report_ file, applying the required mapping.
+    Compares two E911 files, identifies discrepancies, and outputs a report 
+    populated with the NEW/CORRECT data from the E911_Report_ file, applying 
+    the required mapping, and standardizing the Site # key.
     
     Args:
         file_path_1 (str): Path to the first file (either Daily or Report).
@@ -450,7 +450,7 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     output_cols_final_order = [v['Output_Col'] for v in COLUMN_MAP.values()]
     MERGE_KEY_COL = 'STANDARDIZED_SITE_ID' 
 
-    # 2. File Reading & Role Assignment (INTELLIGENT)
+    # 2. File Reading & Role Assignment
     df_daily = None
     df_report = None
     
@@ -499,17 +499,16 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         print(f"Error: Required merge key column '{REPORT_KEY}' is missing from the NEW (Excel) file.")
         return
             
+    # ZERO-PADDING FIX IS APPLIED HERE
     df_daily[MERGE_KEY_COL] = df_daily[DAILY_KEY].astype(str).str.strip().str.upper().str.zfill(4)
     df_report[MERGE_KEY_COL] = df_report[REPORT_KEY].astype(str).str.strip().str.upper().str.zfill(4)
 
     # 4. Select and Rename Columns for Merging
-    # Daily columns (Left side) get a '_daily' suffix for comparison
     daily_rename_map = {col: f"{col}_daily" for col in daily_cols}
     daily_final_cols = [col for col in daily_cols if col in df_daily.columns]
     df_daily_subset = df_daily[daily_final_cols + [MERGE_KEY_COL]].copy()
     df_daily_subset.rename(columns=daily_rename_map, inplace=True)
     
-    # Report columns (Right side) used for comparison AND output selection
     report_relevant_cols = list(set(col_map['E911_Report_Col'] for col_map in COLUMN_MAP.values()))
     df_report_subset = df_report[[col for col in df_report.columns if col in report_relevant_cols] + [MERGE_KEY_COL]].copy()
     
@@ -521,8 +520,7 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         how='left'
     )
 
-    # 6. Discrepancy Finding Logic (UNCHANGED)
-    # The discrepancy check still relies on the original Daily column names (with _daily suffix)
+    # 6. Discrepancy Finding Logic
     daily_comp_cols = [f"{col}_daily" for col in COMPARISON_COLS]
     report_comp_cols = [COLUMN_MAP[col]['E911_Report_Col'] for col in COMPARISON_COLS]
     
@@ -541,36 +539,27 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
     
     print(f"Found {len(df_diff)} discrepancies.")
 
-    # 7. Final Output Generation and Renaming (MODIFIED FOR OPTION B: NEW DATA)
+    # 7. Final Output Generation and Renaming (Populated by NEW Data)
     if not df_diff.empty:
         
-        # 7a. Determine the source columns for the final output (NEW DATA)
-        # The output needs 20 columns. We take NEW data for the key/mapped columns.
         output_source_map = {}
         for daily_col, map_details in COLUMN_MAP.items():
             output_col = map_details['Output_Col']
             report_col = map_details['E911_Report_Col']
             
-            # CRITICAL LOGIC: Project ID is only coming from the OLD file, as requested.
+            # Project ID is the only column coming from the OLD file, as requested.
             if daily_col == 'P:Project ID':
-                # Map OLD (Daily) data: P:Project ID_daily -> Project ID
                 output_source_map[f"{daily_col}_daily"] = output_col
             else:
-                # Map NEW (Report) data: E911_Report_Col -> Output_Col
+                # All other columns, including Site # (Viaero Root ID), come from the NEW file.
                 output_source_map[report_col] = output_col
 
-        # Create the list of columns to select from df_diff (keys of output_source_map)
         cols_to_select = list(output_source_map.keys())
-        
-        # The merge key (STANDARDIZED_SITE_ID) is also needed to ensure the merge worked, but not in final output
-        # If DAILY_KEY is not P:Project ID, we need to ensure the merge key from Daily (P:Project ID_daily) is selected
         
         df_output = df_diff[cols_to_select].copy()
         
-        # 7b. Apply the final rename map
-        final_rename_map = output_source_map
-        
-        df_output.rename(columns=final_rename_map, inplace=True)
+        # Apply the final rename map
+        df_output.rename(columns=output_source_map, inplace=True)
         
         # Ensure the columns are in the correct final order
         df_output = df_output[output_cols_final_order]
@@ -585,5 +574,6 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         
     else:
         print("✅ No differences found. No report generated.")
+
 
 
