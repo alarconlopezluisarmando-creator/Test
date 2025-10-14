@@ -201,3 +201,9 @@ Update point 2
         print(f"Error reading files: {e}")
         return
 
+
+error 
+--- Starting comparison: E911_Report_2025-10-14_14-33-24.csv (Old) vs. E911_Daily_202510141222_53452.xlsx (New) ---
+UTF-8 decode failed. Trying 'latin-1' encoding for E911_Daily_ file...
+Error: Required merge key columns ('P:Viaero Root ID' or 'Site #') are missing.
+
