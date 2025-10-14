@@ -161,13 +161,7 @@ def process_e911_discrepancy_report(daily_file_path, report_file_path):
         df_output.to_excel(output_path, index=False)
         print(f"✅ Final Discrepancy Report saved to: {output_path}")
         
-        # SFTP upload logic (uncomment and define 'upload_file_to_sftp' to use)
-        # sftp_host = '54.225.75.239'
-        # sftp_port = 22
-        # sftp_username = 'sea2_es'
-        # sftp_password = 'M5v3WV3ThaG9'
-        # sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/'
-        # upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+==
         
     else:
         print("✅ No differences found. No report generated.")
@@ -181,3 +175,29 @@ if __name__ == '__main__':
     
     # process_e911_discrepancy_report(daily_file, report_file)
     print("\n--- Script finished. Please uncomment the example call and define actual paths to run the function. ---")
+
+Update point 2
+
+    # 2. File Reading (UPDATED to handle encoding errors)
+    try:
+        # Try reading with common encodings if the default (UTF-8) fails
+        try:
+            df_daily = pd.read_csv(daily_file_path)
+        except UnicodeDecodeError:
+            print("UTF-8 decode failed. Trying 'latin-1' encoding for E911_Daily_ file...")
+            try:
+                df_daily = pd.read_csv(daily_file_path, encoding='latin-1')
+            except Exception:
+                 print("Latin-1 decode failed. Trying 'cp1252' encoding...")
+                 df_daily = pd.read_csv(daily_file_path, encoding='cp1252')
+                 
+        # E911_Report_ is assumed to be Excel, which handles encoding better
+        df_report = pd.read_excel(report_file_path, engine='openpyxl')
+        
+    except FileNotFoundError as e:
+        print(f"Error: One of the files was not found. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
