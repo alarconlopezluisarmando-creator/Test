@@ -234,3 +234,21 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         
     else:
         print("✅ No differences found. No report generated.")
+
+
+---V7
+
+        # --- NEW FILTERING LOGIC: Remove rows containing 'XITOR_KEY' ---
+        
+        initial_row_count = len(df_output)
+        
+        if 'Project ID' in df_output.columns:
+            # Filter rows where 'Project ID' is NOT null AND does NOT contain 'XITOR_KEY' (case-insensitive)
+            # We use .fillna('') to treat NaN/None values as empty strings for the str.contains check
+            df_output = df_output[
+                ~df_output['Project ID'].astype(str).str.upper().str.contains('XITOR_KEY', na=False)
+            ]
+            
+            rows_removed = initial_row_count - len(df_output)
+            print(f"Removed {rows_removed} rows where 'Project ID' contained 'XITOR_KEY'.")
+        # ------------------------------------------------------------------
