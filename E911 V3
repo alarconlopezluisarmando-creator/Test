@@ -1,5 +1,53 @@
---- Starting comparison between E911_Report_2025-10-14_14-33-24.csv and E911_Daily_202510141222_53452.xlsx ---
-UTF-8 decode failed for E911_Report_2025-10-14_14-33-24.csv. Trying 'latin-1'...
---- Roles: E911_Daily_202510141222_53452.xlsx is OLD (Excel), E911_Report_2025-10-14_14-33-24.csv is NEW (CSV) ---
-Found 961 discrepancies.
-An error occurred during file processing: "['Project ID'] not in index"
+# ... (rest of the function is the same)
+
+    # 7. Final Output Generation and Renaming (FIXED for NEW Data Source)
+    if not df_diff.empty:
+        
+        output_source_map = {}
+        for daily_col, map_details in COLUMN_MAP.items():
+            output_col = map_details['Output_Col']
+            report_col = map_details['E911_Report_Col']
+            
+            # All columns are sourced from the NEW/Report file's headers (report_col)
+            output_source_map[report_col] = output_col
+
+        cols_to_select = list(output_source_map.keys())
+        
+        # --- NEW ROBUST CHECK FOR MISSING COLUMN ---
+        
+        # The key columns must be present in the merged DataFrame
+        missing_cols = [col for col in cols_to_select if col not in df_diff.columns]
+        
+        # Check if the mandatory Project ID column is missing
+        if 'Project ID' in missing_cols:
+            print("FATAL ERROR: The mandatory 'Project ID' column is missing from the NEW (CSV) file after merging.")
+            print(f"Expected column name: 'Project ID'")
+            print(f"Columns actually present in the data used for output: {list(df_diff.columns)}")
+            
+            # TEMPORARY: Check for similar column names if the exact one is missing
+            potential_matches = [col for col in df_diff.columns if 'PROJECT' in col.upper()]
+            if potential_matches:
+                print(f"Potential column matches found: {potential_matches}")
+            
+            print("Please verify the exact header for Project ID in the E911_Report (CSV) file.")
+            return
+            
+        # If Project ID is present, proceed with selection
+        df_output = df_diff[cols_to_select].copy()
+        
+        # Apply the final rename map
+        df_output.rename(columns=output_source_map, inplace=True)
+        
+        # Ensure the columns are in the correct final order
+        df_output = df_output[output_cols_final_order]
+
+        # Output File Generation
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_E911_{timestamp}.xlsx" 
+        output_path = os.path.join(os.path.dirname(os.path.abspath(file_path_1)), output_file_name) 
+        
+        df_output.to_excel(output_path, index=False)
+        print(f"✅ Final New Data Report saved to: {output_path} (Populated with E911_Report/NEW data)")
+        
+    else:
+        print("✅ No differences found. No report generated.")
