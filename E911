@@ -1,0 +1,182 @@
+I have belo code, is comparing two files and give an outuput with rename columns. 
+
+Could you help me to update the code with below mapping. 
+
+E911_Daily_	E911_Report_	Output
+P:Project ID		Project ID
+P:FCC Site ID Number	FCC Location ID	FCC Site ID
+P:Viaero Root ID	Site #	Viaero Root ID
+P:Viaero Site Name	Site Name	Viaero Site Name
+P:TVW estimated ready/rough forecast date (QB)	TVW estimated ready/rough forecast date:	P_TVW_EST_READY_FORE_QB
+P:911 TVW - Blank (QB)	911 TVW - Blank	P_911_TVW__BLANK_QB
+P:911 TVW - Complete (QB)	911 TVW - Complete	P_911_TVW__COMPLETE_QB
+P:PSAP - FCC ID (QB)	PSAP - FCC ID	P_PSAP__FCC_ID_QB
+P:PSAP NAME (QB)	PSAP NAME	P_PSAP_NAME_QB
+P:PSAP E-911 CURRENT STATUS (QB)	PSAP E-911 CURRENT STATUS	P_PSAP_E911_CURRENT_STATUS_QB
+P:PSAP - FCC ID - PSAP ADMIN phone# (non-emergency) (QB)	PSAP - FCC ID - PSAP ADMIN phone# (non-emergency)	P_PSAP_FCC_ID__PSAP_ADM_PHON
+P:Tower Type (QB)	Tower Type	P_TOWER_TYPE_QB
+P:Building/Cabinet (QB)	Building/Cabinet	P_BUILDING_CABINET_QB
+P:FRN Cluster ID	FRN Number	FRN Cluster ID
+P:Samsung Opto Cluster (QB)	Samsung Opto Cluster	P_SAMSUNG_OPTO_CLUSTER_QB
+P:ESTIMATED BUILD YEAR (QB)	ESTIMATED BUILD YEAR	P_ESTIMATED_BUILD_YEAR_QB
+P:Tower Online (QB)	Tower Online	P_TOWER_ONLINE_QB
+P:Tower Online Date (QB)	Tower Online Date	P_TOWER_ONLINE_DATE_QB
+P:CAF-II site? (QB)	CAF-II site?	P_CAFII_SITE_QB
+P:Grant Site (QB)	Grant Site	P_GRANT_SITE_QB
+
+
+def process_and_compare_files(quote_report_path, quote_tracker_path):
+    """
+    Reads the two files, uses REGEX to cleanly extract Quote ID, creates a 
+    SITE# + QUOTE_ID composite key, and compares the files.
+    """
+    print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
+    
+    # Define a regex pattern to reliably extract the core Quote ID (e.g., 'SV0282.00')
+    # This pattern looks for two uppercase letters followed by digits and a decimal point.
+    QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
+    
+    try:
+        df_quotes = pd.read_csv(quote_report_path)
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError as e:
+        print(f"Error: One of the downloaded files was not found at its local path. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+
+    # --- Data Standardization for Merge ---
+
+    # 1. Process Quotes Report
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+
+    if 'Document' in df_quotes.columns:
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        
+        # Check if extraction was successful for any row
+        if df_quotes['QT:Quote ID'].eq('').all():
+             print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
+             return
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
+
+    # 2. Process Quote Tracker
+    if 'QT:Root Cell ID' in df_tracker.columns:
+        df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
+        df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
+        return
+    
+    if 'QT:Quote ID' in df_tracker.columns:
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_tracker['QT:Quote ID'] = df_tracker['QT:Quote ID'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+    else:
+        print("Error: The required 'QT:Quote ID' column was not found in the Tracker file.")
+        return
+
+    # --- CRITICAL FIX: Create Composite Merge Key ---
+    # Merge will now happen on SITE# + QUOTE ID, ensuring a unique 1:1 match
+    df_quotes['MERGE_KEY'] = df_quotes['Site #'] + '_' + df_quotes['QT:Quote ID']
+    df_tracker['MERGE_KEY'] = df_tracker['Site #'] + '_' + df_tracker['QT:Quote ID']
+
+    # --- Merge on the unique "MERGE_KEY" ---
+    merged_df = pd.merge(
+        df_quotes,
+        df_tracker,
+        on='MERGE_KEY', # Using the new composite key
+        how='left',
+        suffixes=('_quotes', '_tracker')
+    )
+    
+    # ** Diagnostic Check **
+    if merged_df['Site #_tracker'].isnull().all() and not df_quotes.empty:
+        print("\n*** WARNING: ALL TRACKER COLUMNS ARE LIKELY BLANK (MERGE FAILURE) ***")
+        print("This means NO COMPOSITE KEY matched between the Report and the Tracker.")
+        print("Check Site # and Quote ID cleaning logic.")
+        
+    # --- Comparison Logic ---
+    # Requirement 3: Concatenate key columns from Quotes_Report_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #_quotes', 'Document Type - RAN', 'Review History',
+        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate key columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'Site #_tracker', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    # Include rows where the concatenated strings differ OR where the tracker data is entirely null (no match found)
+    df_diff = merged_df[(merged_df['Conca_quotes'] != merged_df['Conca_tracker']) | merged_df['Site #_tracker'].isnull()]
+    
+    # Remove rows where the Report's Quote ID was invalid (blank)
+    df_diff = df_diff[df_diff['QT:Quote ID_quotes'].notna() & (df_diff['QT:Quote ID_quotes'] != '')]
+
+    # Remove duplicates and keep the latest based on QT_QB_REVIEW_HISTORY
+    df_diff = df_diff.sort_values(by=['QT:Quote ID_quotes', 'QT:QB - Review History'], ascending=[True, False])
+    df_diff = df_diff.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
+
+    # ====================================================================
+    # === OUTPUT: DEBUG/COMPARISON FILE (Raw data of differences) ===
+    # ====================================================================
+    if not df_diff.empty:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
+        debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name)
+        
+        # Include the MERGE_KEY in the debug file for easy validation
+        df_diff.to_excel(debug_output_path, index=False)
+        print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences (merged raw data) saved to: {debug_output_path}")
+
+    # ====================================================================
+    # === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
+    # ====================================================================
+    if not df_diff.empty:
+        df_output = df_diff[[
+            # Use the clean, extracted QT:Quote ID from the quotes file (Source of Truth)
+            'QT:Quote ID_quotes', 
+            'Submittal Date',
+            'Document Type - RAN',
+            'Review History',
+            'Doc Review Status Text',
+            'Date Approved',
+            'Rejection Notes',
+            'Redline Notes'
+        ]].rename(columns={
+            # The output key is now guaranteed to be the clean, core Quote ID
+            'QT:Quote ID_quotes': 'QUOTE_TRACKER_XITOR_KEY',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
+            'Review History': 'QT_QB__REVIEW_HISTORY',
+            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'Date Approved': 'QT_QB__DATE_APPROVED',
+            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
+        })
+        
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_E911_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Final Discrepancy Report saved to: {output_path}")
+        
+        sftp_host = '54.225.75.239'
+        sftp_port = 22
+        sftp_username = 'sea2_es'
+        sftp_password = 'M5v3WV3ThaG9'
+        sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/'
+        upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
