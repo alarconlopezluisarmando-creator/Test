@@ -252,3 +252,261 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
             rows_removed = initial_row_count - len(df_output)
             print(f"Removed {rows_removed} rows where 'Project ID' contained 'XITOR_KEY'.")
         # ------------------------------------------------------------------
+
+
+--Question regarding to push the file to OV
+
+def process_e911_discrepancy_report(file_path_1, file_path_2):
+    """
+    Compares two E911 files, identifies discrepancies, and outputs a report 
+    populated with the NEW/CORRECT data for updates. Project ID is sourced 
+    from the OLD (Excel) file. The columns FCC Location ID, Site #, and Site Name
+    are excluded from the final output.
+
+    Args:
+        file_path_1 (str): Path to the first file (either Daily/OLD or Report/NEW).
+        file_path_2 (str): Path to the second file (either Daily/OLD or Report/NEW).
+    """
+    print(f"\n--- Starting comparison between {os.path.basename(file_path_1)} and {os.path.basename(file_path_2)} ---")
+    
+    # 1. Define Column Mapping and Keys (UPDATED to exclude output names)
+    
+    DAILY_KEY_HEADER = 'P:Viaero Root ID'
+    REPORT_KEY_HEADER = 'Site #'
+    
+    # Placeholder for columns to be removed from final output, set 'Output_Col' to None
+    COLUMNS_TO_EXCLUDE_FROM_OUTPUT = {
+        'P:FCC Site ID Number': {'Output_Col_Name': 'FCC Location ID'},
+        DAILY_KEY_HEADER: {'Output_Col_Name': 'Site #'},
+        'P:Viaero Site Name': {'Output_Col_Name': 'Site Name'}
+    }
+    
+    COLUMN_MAP = {
+        # Old (Excel) Header (Daily Header) : {New (CSV) Header (Report Header), Final Output Name}
+        'P:Project ID': {'E911_Report_Col': 'P:Project ID', 'Output_Col': 'Project ID'}, # Source is OLD/Daily
+        
+        # Core Keys (Needed for Merge and Comparison, but Output_Col is None/Excluded)
+        'P:FCC Site ID Number': {'E911_Report_Col': 'FCC Location ID', 'Output_Col': None}, # EXCLUDED
+        DAILY_KEY_HEADER: {'E911_Report_Col': REPORT_KEY_HEADER, 'Output_Col': None},       # EXCLUDED
+        'P:Viaero Site Name': {'E911_Report_Col': 'Site Name', 'Output_Col': None},         # EXCLUDED
+
+        # Data Columns (Sourced from NEW/Report)
+        'P:TVW estimated ready/rough forecast date (QB)': {'E911_Report_Col': 'TVW estimated ready/rough forecast date:', 'Output_Col': 'P_TVW_EST_READY_FORE_QB'},
+        'P:911 TVW - Blank (QB)': {'E911_Report_Col': '911 TVW - Blank', 'Output_Col': 'P_911_TVW__BLANK_QB'},
+        'P:911 TVW - Complete (QB)': {'E911_Report_Col': '911 TVW - Complete', 'Output_Col': 'P_911_TVW__COMPLETE_QB'},
+        'P:PSAP - FCC ID (QB)': {'E911_Report_Col': 'PSAP - FCC ID', 'Output_Col': 'P_PSAP__FCC_ID_QB'},
+        'P:PSAP NAME (QB)': {'E911_Report_Col': 'PSAP NAME', 'Output_Col': 'P_PSAP_NAME_QB'},
+        'P:PSAP E-911 CURRENT STATUS (QB)': {'E911_Report_Col': 'PSAP E-911 CURRENT STATUS', 'Output_Col': 'P_PSAP_E911_CURRENT_STATUS_QB'},
+        'P:PSAP - FCC ID - PSAP ADMIN phone# (non-emergency) (QB)': {'E911_Report_Col': 'PSAP - FCC ID - PSAP ADMIN phone# (non-emergency)', 'Output_Col': 'P_PSAP_FCC_ID__PSAP_ADM_PHON'},
+        'P:Tower Type (QB)': {'E911_Report_Col': 'Tower Type', 'Output_Col': 'P_TOWER_TYPE_QB'},
+        'P:Building/Cabinet (QB)': {'E911_Report_Col': 'Building/Cabinet', 'Output_Col': 'P_BUILDING_CABINET_QB'},
+        'P:R&R Site?': {'E911_Report_Col': 'R&R Site', 'Output_Col': 'P_RR_SITE'},
+        'P:Samsung Opto Cluster (QB)': {'E911_Report_Col': 'Samsung Opto Cluster', 'Output_Col': 'P_SAMSUNG_OPTO_CLUSTER_QB'},
+        'P:ESTIMATED BUILD YEAR (QB)': {'E911_Report_Col': 'ESTIMATED BUILD YEAR', 'Output_Col': 'P_ESTIMATED_BUILD_YEAR_QB'},
+        'P:Tower Online (QB)': {'E911_Report_Col': 'Tower Online', 'Output_Col': 'P_TOWER_ONLINE_QB'},
+        'P:Tower Online Date (QB)': {'E911_Report_Col': 'Tower Online Date', 'Output_Col': 'P_TOWER_ONLINE_DATE_QB'},
+        'P:CAF-II site? (QB)': {'E911_Report_Col': 'CAF-II site?', 'Output_Col': 'P_CAFII_SITE_QB'},
+        'P:Grant Site (QB)': {'E911_Report_Col': 'Grant Site', 'Output_Col': 'P_GRANT_SITE_QB'}
+    }
+
+    # Columns used for discrepancy check (These are still necessary!)
+    COMPARISON_COLS = [
+        'P:TVW estimated ready/rough forecast date (QB)', 'P:911 TVW - Blank (QB)',
+        'P:911 TVW - Complete (QB)', 'P:PSAP E-911 CURRENT STATUS (QB)',
+        'P:Tower Online (QB)', 'P:Tower Online Date (QB)',
+        'P:Viaero Site Name', 'P:FCC Site ID Number'
+    ]
+
+    daily_cols = list(COLUMN_MAP.keys())
+    
+    # Generate the final output order, excluding columns where 'Output_Col' is None
+    output_cols_final_order = [
+        'Project ID'
+    ] + [
+        map_details['Output_Col'] for map_details in COLUMN_MAP.values() 
+        if map_details['Output_Col'] is not None and map_details['Output_Col'] != 'Project ID'
+    ]
+    
+    MERGE_KEY_COL = 'STANDARDIZED_SITE_ID' 
+    
+    # 2. File Reading & Role Assignment (UNCHANGED)
+    df_daily = None
+    df_report = None
+    
+    def read_robust_csv(path):
+        try:
+            return pd.read_csv(path)
+        except UnicodeDecodeError:
+            try:
+                print(f"UTF-8 decode failed for {os.path.basename(path)}. Trying 'latin-1'...")
+                return pd.read_csv(path, encoding='latin-1')
+            except Exception:
+                print(f"Latin-1 decode failed for {os.path.basename(path)}. Trying 'cp1252'...")
+                return pd.read_csv(path, encoding='cp1252')
+    
+    try:
+        # Check based on .csv is NEW, .xlsx is OLD
+        if file_path_1.lower().endswith('.csv') and file_path_2.lower().endswith(('.xlsx', '.xls')):
+            df_report = read_robust_csv(file_path_1)  # CSV is NEW
+            df_daily = pd.read_excel(file_path_2, engine='openpyxl') # Excel is OLD
+            print(f"--- Roles: {os.path.basename(file_path_2)} is OLD (Excel), {os.path.basename(file_path_1)} is NEW (CSV) ---")
+            
+        elif file_path_2.lower().endswith('.csv') and file_path_1.lower().endswith(('.xlsx', '.xls')):
+            df_report = read_robust_csv(file_path_2) # CSV is NEW
+            df_daily = pd.read_excel(file_path_1, engine='openpyxl') # Excel is OLD
+            print(f"--- Roles: {os.path.basename(file_path_1)} is OLD (Excel), {os.path.basename(file_path_2)} is NEW (CSV) ---")
+            
+        else:
+            print("Error: Could not determine file roles. Expecting one CSV (NEW) and one Excel (OLD) file.")
+            return
+
+    except FileNotFoundError as e:
+        print(f"Error: One of the files was not found. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names by stripping whitespace
+    df_daily.columns = df_daily.columns.str.strip()
+    df_report.columns = df_report.columns.str.strip()
+
+    # 3. Data Preparation and Standardization on the Merge Key (UNCHANGED logic)
+    if DAILY_KEY_HEADER not in df_daily.columns:
+        print(f"Error: Required merge key column '{DAILY_KEY_HEADER}' is missing from the OLD (Excel) file.")
+        return
+    
+    if REPORT_KEY_HEADER not in df_report.columns:
+        print(f"Error: Required merge key column '{REPORT_KEY_HEADER}' is missing from the NEW (CSV) file.")
+        print("Please ensure the column names match the map exactly.")
+        return
+            
+    # ZERO-PADDING FIX (Site # on the NEW/Report file)
+    df_daily[MERGE_KEY_COL] = df_daily[DAILY_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
+    df_report[MERGE_KEY_COL] = df_report[REPORT_KEY_HEADER].astype(str).str.strip().str.upper().str.zfill(4)
+
+    # 4. Select and Rename Columns for Merging (UNCHANGED logic)
+    daily_rename_map = {col: f"{col}_daily" for col in daily_cols}
+    daily_final_cols = [col for col in daily_cols if col in df_daily.columns]
+    
+    df_daily_subset = df_daily[daily_final_cols + [MERGE_KEY_COL]].copy()
+    df_daily_subset.rename(columns=daily_rename_map, inplace=True)
+    
+    # Report columns (Right side) used for comparison AND output selection
+    report_relevant_cols = list(set(col_map['E911_Report_Col'] for col_map in COLUMN_MAP.values()))
+    
+    report_cols_present = [col for col in df_report.columns if col in report_relevant_cols]
+    
+    df_report_subset = df_report[report_cols_present + [MERGE_KEY_COL]].copy()
+    
+    # 5. Merge the DataFrames (Left Merge)
+    merged_df = pd.merge(
+        df_daily_subset,
+        df_report_subset,
+        on=MERGE_KEY_COL, 
+        how='left'
+    )
+
+    # 6. Discrepancy Finding Logic (UNCHANGED)
+    daily_comp_cols = [f"{col}_daily" for col in COMPARISON_COLS]
+    
+    daily_comp_cols_present = [col for col in daily_comp_cols if col in merged_df.columns]
+    
+    report_comp_cols_present = []
+    for daily_header in daily_comp_cols_present:
+        original_daily_header = daily_header.replace('_daily', '')
+        if original_daily_header in COLUMN_MAP and original_daily_header != 'P:Project ID':
+             report_header = COLUMN_MAP[original_daily_header]['E911_Report_Col']
+             if report_header in merged_df.columns:
+                 report_comp_cols_present.append(report_header)
+             # Note: P:FCC Site ID Number and P:Viaero Site Name are compared, 
+             # and their report headers are in report_relevant_cols, so they are included here.
+        elif original_daily_header == 'P:Project ID':
+            # Project ID is not used for comparison, so skip it here
+            pass
+
+    merged_df['daily_concat'] = merged_df[daily_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
+    merged_df['report_concat'] = merged_df[report_comp_cols_present].fillna('').astype(str).agg('::'.join, axis=1)
+
+    # Check for two conditions: 1) Discrepancy in comparison fields OR 2) Missing Site in Report (NEW) file
+    df_diff = merged_df[
+        (merged_df['daily_concat'] != merged_df['report_concat']) |
+        (merged_df[REPORT_KEY_HEADER].isna())
+    ].copy()
+    
+    print(f"Found {len(df_diff)} discrepancies.")
+
+    # 7. Final Output Generation and Renaming (ADJUSTED for exclusion)
+    if not df_diff.empty:
+        
+        # Prepare the map for columns that ARE NOT EXCLUDED
+        output_source_map = {}
+        for daily_col, map_details in COLUMN_MAP.items():
+            if map_details['Output_Col'] is not None and map_details['Output_Col'] != 'Project ID':
+                # Map NEW/Report header to Final Output header
+                output_source_map[map_details['E911_Report_Col']] = map_details['Output_Col']
+        
+        # Select Report-sourced columns that are not excluded
+        cols_to_select_report = list(output_source_map.keys())
+        cols_to_select_present = [col for col in cols_to_select_report if col in df_diff.columns]
+        
+        df_output = df_diff[cols_to_select_present].copy()
+        
+        # Apply rename for Report-sourced columns
+        present_rename_map = {k: v for k, v in output_source_map.items() if k in cols_to_select_present}
+        df_output.rename(columns=present_rename_map, inplace=True)
+        
+        # --- PROJECT ID LOGIC: VLOOKUP from OLD/Daily file ---
+        DAILY_PROJECT_ID_COL = 'P:Project ID_daily'
+        
+        if DAILY_PROJECT_ID_COL in df_diff.columns:
+            # Insert the OLD/Daily Project ID data at the beginning of the output DataFrame
+            df_output.insert(0, 'Project ID', df_diff[DAILY_PROJECT_ID_COL])
+        else:
+            print(f"CRITICAL WARNING: '{DAILY_PROJECT_ID_COL}' is missing. Output 'Project ID' column will be empty.")
+            df_output.insert(0, 'Project ID', None)
+        # ---------------------------------------------------
+
+        # Re-align columns to the final desired order (which now excludes the 3 columns)
+        final_cols_for_output = [col for col in output_cols_final_order if col in df_output.columns]
+        df_output = df_output[final_cols_for_output]
+
+        # --- NEW FILTERING LOGIC: Remove rows containing 'XITOR_KEY' ---
+        
+        initial_row_count = len(df_output)
+        
+        if 'Project ID' in df_output.columns:
+            # Filter rows where 'Project ID' is NOT null AND does NOT contain 'XITOR_KEY' (case-insensitive)
+            # We use .fillna('') to treat NaN/None values as empty strings for the str.contains check
+            df_output = df_output[
+                ~df_output['Project ID'].astype(str).str.upper().str.contains('XITOR_KEY', na=False)
+            ]
+            
+            rows_removed = initial_row_count - len(df_output)
+            print(f"Removed {rows_removed} rows where 'Project ID' contained 'XITOR_KEY'.")
+        # ------------------------------------------------------------------
+
+        # Output File Generation
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_E911_{timestamp}.xlsx" 
+        base_dir = os.path.dirname(os.path.abspath(file_path_1))
+        output_path = os.path.join(base_dir, output_file_name) 
+        
+        df_output.to_excel(output_path, index=False)
+        print(f"✅ Final New Data Report saved to: {output_path} (Project ID from OLD/Daily, other data from NEW/Report)")
+        
+    else:
+        print("✅ No differences found. No report generated.")
+
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_E911_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Final Discrepancy Report saved to: {output_path}")
+        
+        sftp_host = '54.225.75.239'
+        sftp_port = 22
+        sftp_username = 'sea2_es'
+        sftp_password = 'M5v3WV3ThaG9'
+        sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/'
+        upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
