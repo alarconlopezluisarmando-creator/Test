@@ -797,4 +797,12 @@ def process_e911_discrepancy_report(file_path_1, file_path_2):
         print("✅ No differences found. No report generated.")
 
 
+--- Starting comparison between E911_Report_2025-10-14_14-33-24.csv and E911_Daily_202510141222_53452.xlsx ---
+UTF-8 decode failed for E911_Report_2025-10-14_14-33-24.csv. Trying 'latin-1'...
+--- Roles: E911_Report_2025-10-14_14-33-24.csv is OLD (CSV), E911_Daily_202510141222_53452.xlsx is NEW (Excel) ---
+Error: Required merge key column 'Site #' is missing from the NEW (Excel) file.
+Available columns in NEW file: ['P:Project ID', 'P:FCC Site ID Number', 'P:Viaero Root ID', 'P:Viaero Site Name', 'P:TVW estimated ready/rough forecast date (QB)', 'P:911 TVW - Blank (QB)', 'P:911 TVW - Complete (QB)', 'P:PSAP - FCC ID (QB)', 'P:PSAP NAME (QB)', 'P:PSAP E-911 CURRENT STATUS (QB)', 'P:PSAP - FCC ID - PSAP ADMIN phone# (non-emergency) (QB)', 'P:Tower Type (QB)', 'P:Building/Cabinet (QB)', 'P:FRN Cluster ID', 'P:Samsung Opto Cluster (QB)', 'P:ESTIMATED BUILD YEAR (QB)', 'P:Tower Online (QB)', 'P:Tower Online Date (QB)', 'P:CAF-II site? (QB)', 'P:Grant Site (QB)']
+Please confirm the exact name of the Site ID/Root ID column in your Excel file.
+
+
 
