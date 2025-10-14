@@ -1,53 +1,34 @@
-# ... (rest of the function is the same)
+--- Starting comparison between E911_Report_2025-10-14_14-33-24.csv and E911_Daily_202510141222_53452.xlsx ---
+UTF-8 decode failed for E911_Report_2025-10-14_14-33-24.csv. Trying 'latin-1'...
+--- Roles: E911_Daily_202510141222_53452.xlsx is OLD (Excel), E911_Report_2025-10-14_14-33-24.csv is NEW (CSV) ---
+Found 961 discrepancies.
+FATAL ERROR: The mandatory 'Project ID' column is missing from the NEW (CSV) file after merging.
+Expected column name: 'Project ID'
+Columns actually present in the data used for output: ['P:Project ID_daily', 'P:FCC Site ID Number_daily', 'P:Viaero Root ID_daily', 'P:Viaero Site Name_daily', 'P:TVW estimated ready/rough forecast date (QB)_daily', 'P:911 TVW - Blank (QB)_daily', 'P:911 TVW - Complete (QB)_daily', 'P:PSAP - FCC ID (QB)_daily', 'P:PSAP NAME (QB)_daily', 'P:PSAP E-911 CURRENT STATUS (QB)_daily', 'P:PSAP - FCC ID - PSAP ADMIN phone# (non-emergency) (QB)_daily', 'P:Tower Type (QB)_daily', 'P:Building/Cabinet (QB)_daily', 'P:FRN Cluster ID_daily', 'P:Samsung Opto Cluster (QB)_daily', 'P:ESTIMATED BUILD YEAR (QB)_daily', 'P:Tower Online (QB)_daily', 'P:Tower Online Date (QB)_daily', 'P:CAF-II site? (QB)_daily', 'P:Grant Site (QB)_daily', 'STANDARDIZED_SITE_ID', 'FCC Location ID', 'Site #', 'Site Name', 'TVW estimated ready/rough forecast date:', '911 TVW - Blank', '911 TVW - Complete', 'PSAP - FCC ID', 'PSAP NAME', 'PSAP E-911 CURRENT STATUS', 'PSAP - FCC ID - PSAP ADMIN phone# (non-emergency)', 'Tower Type', 'Building/Cabinet', 'FRN Number', 'Samsung Opto Cluster', 'ESTIMATED BUILD YEAR', 'Tower Online', 'Tower Online Date', 'CAF-II site?', 'Grant Site', 'daily_concat', 'report_concat']
+Potential column matches found: ['P:Project ID_daily']
+Please verify the exact header for Project ID in the E911_Report (CSV) file.
 
-    # 7. Final Output Generation and Renaming (FIXED for NEW Data Source)
-    if not df_diff.empty:
-        
-        output_source_map = {}
-        for daily_col, map_details in COLUMN_MAP.items():
-            output_col = map_details['Output_Col']
-            report_col = map_details['E911_Report_Col']
-            
-            # All columns are sourced from the NEW/Report file's headers (report_col)
-            output_source_map[report_col] = output_col
+please be awere that we're using a mapping for the output file 
 
-        cols_to_select = list(output_source_map.keys())
-        
-        # --- NEW ROBUST CHECK FOR MISSING COLUMN ---
-        
-        # The key columns must be present in the merged DataFrame
-        missing_cols = [col for col in cols_to_select if col not in df_diff.columns]
-        
-        # Check if the mandatory Project ID column is missing
-        if 'Project ID' in missing_cols:
-            print("FATAL ERROR: The mandatory 'Project ID' column is missing from the NEW (CSV) file after merging.")
-            print(f"Expected column name: 'Project ID'")
-            print(f"Columns actually present in the data used for output: {list(df_diff.columns)}")
-            
-            # TEMPORARY: Check for similar column names if the exact one is missing
-            potential_matches = [col for col in df_diff.columns if 'PROJECT' in col.upper()]
-            if potential_matches:
-                print(f"Potential column matches found: {potential_matches}")
-            
-            print("Please verify the exact header for Project ID in the E911_Report (CSV) file.")
-            return
-            
-        # If Project ID is present, proceed with selection
-        df_output = df_diff[cols_to_select].copy()
-        
-        # Apply the final rename map
-        df_output.rename(columns=output_source_map, inplace=True)
-        
-        # Ensure the columns are in the correct final order
-        df_output = df_output[output_cols_final_order]
+E911_Report_	Output
+P:Project ID (from old file)	Project ID
+FCC Location ID	FCC Site ID
+Site #	Viaero Root ID
+Site Name	Viaero Site Name
+TVW estimated ready/rough forecast date:	P_TVW_EST_READY_FORE_QB
+911 TVW - Blank	P_911_TVW__BLANK_QB
+911 TVW - Complete	P_911_TVW__COMPLETE_QB
+PSAP - FCC ID	P_PSAP__FCC_ID_QB
+PSAP NAME	P_PSAP_NAME_QB
+PSAP E-911 CURRENT STATUS	P_PSAP_E911_CURRENT_STATUS_QB
+PSAP - FCC ID - PSAP ADMIN phone# (non-emergency)	P_PSAP_FCC_ID__PSAP_ADM_PHON
+Tower Type	P_TOWER_TYPE_QB
+Building/Cabinet	P_BUILDING_CABINET_QB
+FRN Number	FRN Cluster ID
+Samsung Opto Cluster	P_SAMSUNG_OPTO_CLUSTER_QB
+ESTIMATED BUILD YEAR	P_ESTIMATED_BUILD_YEAR_QB
+Tower Online	P_TOWER_ONLINE_QB
+Tower Online Date	P_TOWER_ONLINE_DATE_QB
+CAF-II site?	P_CAFII_SITE_QB
+Grant Site	P_GRANT_SITE_QB
 
-        # Output File Generation
-        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
-        output_file_name = f"QB_E911_{timestamp}.xlsx" 
-        output_path = os.path.join(os.path.dirname(os.path.abspath(file_path_1)), output_file_name) 
-        
-        df_output.to_excel(output_path, index=False)
-        print(f"✅ Final New Data Report saved to: {output_path} (Populated with E911_Report/NEW data)")
-        
-    else:
-        print("✅ No differences found. No report generated.")
