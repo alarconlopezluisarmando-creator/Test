@@ -1,0 +1,225 @@
+
+1. For the file QuickBase_RFDS_CD_TED.xlsx, we'll filter the column WPK:OV Work Package ID does not contain Viaero Trial
+2. For the column "site #" in the file "RFDS_status_report_", please complete with "0" until have 4 digits. 
+3. Do a vlookup using the P:Viaero Root ID and site #.
+4. If we have a duplicate in the fiel "RFDS_status_report_", we'll use the colum RFDS to bring the latest data. 
+5. Do this IF [RFDS Review Status Text]=[OV RFDS Review Status Text] THEN "OK" ELSE "Update" ENDIF
+6. Do a vlookup using the P:Viaero Root ID and "site #: with the file "RFDS_report_" and bring the column "CBRS (3.65)Site"
+7. Create a file named QB_RFDS_yyyymmdd
+8. Update this file in the path sftp://54.225.75.239:22/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/RFDS/
+9. Creat a funtion named "RFDS Update"
+10. Output file need to have below mapping using columns for the three files that we use before. 
+
+input	output
+P:Project ID	Project ID
+CBRS (3.65) Site	P_QB_CBRS_365_SITE
+P:[QB] Conditional Tower Top	P_QB_CONDITIONAL_TOWER_TOP
+P:[QB] RFDS Vendor Notes	P_QB_RFDS_VENDOR_NOTES
+P:[QB] RFDS Approval History	P_QB_RFDS_APPROVAL_HISTORY
+P:[QB] RFDS Redline Notes	P_QB_RFDS_REDLINE_NOTES
+P:[QB] RFDS Rejection Notes	P_QB_RFDS_REJECTION_NOTES
+RFDS Review Status Text	P_QB_RFDS_REVIEW_STATUS_TEXT
+Date Added	P_QB_DATE_ADDED
+Approval Date	P_QB_RFDS_DATE_APPROVED
+CTO Review Status	P_QB_CTO_REVIEW_STATUS
+Project Team Review Status	P_QB_PROJECT_TEAM_REVIEW_STATUS
+RF Engineer Review Status	P_QB_RF_ENGINEER_REVIEW_STATUS
+
+
+11. Files that using below path, /var/data/Support_Data/quickbase/ use the same FTP to download the data. 
+
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+import openpyxl
+from ayx import Alteryx
+
+def get_latest_file(sftp, remote_file_path, file_prefix, file_extension):
+    """Get the latest file from the SFTP server based on the file prefix and extension."""
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        if file.startswith(file_prefix) and file.endswith(file_extension):
+            try:
+                timestamp_str = file.replace(file_prefix, '').replace(file_extension, '')
+                timestamp_obj = datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S")
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, remote_file_name=None, file_prefix=None, file_extension=None):
+    """Downloads a single file from an SFTP server to a specified network directory."""
+    print("Starting SFTP file download...")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        if file_prefix and file_extension:
+            latest_file = get_latest_file(sftp, remote_file_path, file_prefix, file_extension)
+            if latest_file:
+                full_remote_path = os.path.join(remote_file_path, latest_file)
+                full_local_path = os.path.join(output_network_path, latest_file)
+            else:
+                print("No matching files found in the specified SFTP directory.")
+                return None
+        else:
+            full_remote_path = os.path.join(remote_file_path, remote_file_name)
+            full_local_path = os.path.join(output_network_path, remote_file_name)
+
+        sftp.get(full_remote_path, full_local_path)
+        print(f"File downloaded successfully to {full_local_path}")
+        return full_local_path
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def process_file(file_path):
+    """Reads a file and returns its content as a DataFrame."""
+    print(f"Attempting to process file from: {file_path}")
+    try:
+        if file_path and os.path.exists(file_path):
+            if file_path.endswith('.xlsx'):
+                df = pd.read_excel(file_path, engine='openpyxl')
+            elif file_path.endswith('.csv'):
+                df = pd.read_csv(file_path)
+            print(f"Successfully read file from: {file_path}")
+            return df
+        else:
+            print(f"File not found or path is invalid: {file_path}")
+            return pd.DataFrame()
+    except Exception as e:
+        print(f"Error processing the file: {e}")
+        return pd.DataFrame()
+
+
+network_path = r'C:\path\to\your\local\directory'
+
+# Process for the first output
+try:
+    host = 'xxx'
+    port = xx
+    username = 'xx'
+    password = 'xx'
+    remote_file_path = '/home/samsung_sea2/es/Rancomm/'
+    remote_file_name = 'QuickBase_RFDS_CD_TED.xlsx'
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, remote_file_name)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            Alteryx.write(processed_df, 1)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 1: {e}")
+
+# Process for the second output
+try:
+    host = 'xxx'
+    port = xxx
+    username = 'xxxx'
+    password = 'xxxx'
+    remote_file_path = '/var/data/Support_Data/quickbase/RFDS_status/'
+    file_prefix = 'RFDS_status_report_'
+    file_extension = '.csv'
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix=file_prefix, file_extension=file_extension)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            Alteryx.write(processed_df, 2)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 2: {e}")
+
+# Process for the third output (CD)
+try:
+    host = 'xxx'
+    port = xxx
+    username = 'xxx'
+    password = 'xxxx'
+    remote_file_path = '/var/data/Support_Data/quickbase/CD/'
+    file_prefix = 'CD_report_QB_'
+    file_extension = '.csv'  # Update the extension if needed
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix=file_prefix, file_extension=file_extension)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            Alteryx.write(processed_df, 3)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 3: {e}")
+
+# Process for the fourth output (TED)
+try:
+    host = 'xxx'
+    port = xxx
+    username = 'xxxx'
+    password = 'xxxx'
+    remote_file_path = '/var/data/Support_Data/quickbase/TED/'
+    file_prefix = 'TED_report_QB_'
+    file_extension = '.csv'  # Update the extension if needed
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix=file_prefix, file_extension=file_extension)
+    if downloaded_file_path:
+        processed_df = process_file(downloaded_file_path)
+        if not processed_df.empty:
+            Alteryx.write(processed_df, 4)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 4: {e}")
+    # Process for the fifth output
+try:
+    host = 'xxx'
+    port = xxx
+    username = 'xxxx'
+    password = 'xxxxx'
+    remote_file_path = '/var/data/Support_Data/quickbase/RFDS_3days/'
+    file_prefix = 'RFDS_report_'  # Update the prefix if needed
+    file_extension = '.csv'
+    downloaded_file_path = download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix=file_prefix, file_extension=file_extension)
+    
+    if downloaded_file_path:
+        columns_to_read = [
+            'Site - Project Name',
+            'Network Site Name (complete)',
+            'Site #',
+            'CBRS (3.65) Site'
+        ]
+        processed_df = pd.read_csv(downloaded_file_path, usecols=columns_to_read)
+        
+        if not processed_df.empty:
+            Alteryx.write(processed_df, 5)
+        else:
+            print("No data to display as DataFrame is empty.")
+    else:
+        print("File download failed.")
+except Exception as e:
+    print(f"Error processing output 5: {e}")
