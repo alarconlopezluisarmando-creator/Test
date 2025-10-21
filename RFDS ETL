@@ -1,36 +1,47 @@
-Hi, please help me with below points:
+import pandas as pd
+import paramiko
+import os
+from datetime import datetime
+import numpy as np
+import sys # Added for more robust error handling in main block
+
+# --- 1. Configuration (REPLACE MOCK VALUES) ---
+
+# SFTP HOST 1 (QuickBase)
+HOST1 = "sftp.host1.com"
+PORT1 = 22
+USER1 = "user1"
+PASS1 = "password1"
+REMOTE_PATH1_QB = "/remote/path/to/quickbase/"
+FILE_NAME_QB = "QuickBase_RFDS_CD_TED.xlsx"
+
+# SFTP HOST 2 (RFDS Status & Report, CD Report, TED Report)
+HOST2 = "sftp.host2.com"
+PORT2 = 22
+USER2 = "user2"
+PASS2 = "password2"
+REMOTE_PATH2_STATUS = "/remote/path/to/rfds/status/"
+FILE_PREFIX_STATUS = "RFDS_status_report_"
+REMOTE_PATH2_REPORT = "/remote/path/to/rfds/report/"
+FILE_PREFIX_REPORT = "RFDS_report_"
+REMOTE_PATH2_CD = "/remote/path/to/cd/report/" # New CD Report Path
+FILE_PREFIX_CD = "CD_report_"                  # New CD Report Prefix
+REMOTE_PATH2_TED = "/remote/path/to/ted/report/" # New TED Report Path
+FILE_PREFIX_TED = "TED_report_"                # New TED Report Prefix
 
 
-1. I need to create a funtion named CD, with the same logic that we did for the funtion before. 
-   The only thing that we need to do, is change the output file name to QB_CD_yyyymmdd.csv and upload in a different location /var/data/Support_Data/quickbase/CD/; we dont need to do the vlookup for the columns CBRS 3.65 
+# UPLOAD HOST (Where the final outputs go)
+UPLOAD_HOST = "sftp.uploadhost.com"
+UPLOAD_PORT = 22
+UPLOAD_USER = "upload_user"
+UPLOAD_PASS = "upload_password"
+UPLOAD_REMOTE_PATH = "/remote/path/for/output/RFDS/" # Original RFDS Path
+UPLOAD_REMOTE_PATH_CD = "/var/data/Support_Data/quickbase/CD/" # New CD Path
+UPLOAD_REMOTE_PATH_TED = "/var/data/Support_Data/quickbase/TED/" # New TED Path
 
-Below the mapping:
- 
-source	input	output
-QuickBase_RFDS_CD_TED	P:Project ID	Project ID
-QuickBase_RFDS_CD_TED	P:[QB] - Purpose of Site Plan (CD)	P_QB__PURPOSE_OF_SITE_PLAN
-QuickBase_RFDS_CD_TED	P:[QB] - Preliminary or Final (CD)	P_QB__PRELIMINARY_OR_FINAL
-QuickBase_RFDS_CD_TED	P:[QB] - Drawing Approval History (CD)	P_QB__DRAWING_APPROVAL_HISTORY
-QuickBase_RFDS_CD_TED	P:[QB] - Redline Approval Notes (CD)	P_QB__REDLINE_APPRV_NOTES_CD
-QuickBase_RFDS_CD_TED	P:[QB] - Document Rejection Notes (TED)	P_QB__DRAWING_REJ_NOTES_CD
-CD_report_	Construction Drawing Status Text	P_QB__CONSTR_DRAWING_STATUS
-CD_report_	Date Created	P_QB__DATE_CREATED_CD
-CD_report_	Final Approval Date	P_QB_FINAL_APPROVAL_DATE_CD
-
-2. I need to create thirt funtion named TED, with the same logic that we did for the funtion before. 
-   The only thing that we need to do, is change the output file to QB_TED_yyyymmdd.csv and upload in a different location /var/data/Support_Data/quickbase/TED/; we dont need to do the vlookup for the columns CBRS 3.65 
-
-Below the mapping:
-
-source	input	output
-QuickBase_RFDS_CD_TED	P:Project ID	Project ID
-QuickBase_RFDS_CD_TED	P:Type of Document (TED)	P_TYPE_OF_DOCUMENT_TED
-QuickBase_RFDS_CD_TED	Document Review Status Text	P_QB_DOC_REVIEW_STATUS_TEXT
-QuickBase_RFDS_CD_TED	P:[QB] - Document Redline Notes (TED)	P_QB_DOC_REDLINE_NOTES_TED
-QuickBase_RFDS_CD_TED	P:[QB] - Document Rejection Notes (TED)	P_QB_DOCUMENT_REJECTION_NOTES
-TED_report_	Date Added	P_QB__DATE_ADDED_TED
-TED_report_	Approval Date	P_QB__DATE_APPROVED_TED
-
+# Local Paths and File Settings
+LOCAL_BASE_PATH = os.path.join(os.getcwd(), 'sftp_files')
+FILE_EXTENSION = ".csv"
 
 # --- 2. SFTP Helper Functions ---
 
@@ -55,13 +66,13 @@ def get_latest_file(sftp, remote_file_path, file_prefix, file_extension):
 
 def sftp_connect_and_transfer(host, port, username, password, local_path, remote_path, filename=None, file_prefix=None, direction='download'):
     """Handles both SFTP connection and file transfer (download or upload)."""
-    # If local_path is a directory (download) create it, if it's a file (upload) use its directory
+    # Determine the directory path to create
     if direction == 'download':
-        os.makedirs(local_path, exist_ok=True)
         local_dir = local_path
     else: # upload
         local_dir = os.path.dirname(local_path)
-        os.makedirs(local_dir, exist_ok=True)
+        
+    os.makedirs(local_dir, exist_ok=True)
         
     ssh = None
     sftp = None
@@ -70,7 +81,6 @@ def sftp_connect_and_transfer(host, port, username, password, local_path, remote
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        # Use key-based authentication if needed, otherwise rely on password
         ssh.connect(host, port=port, username=username, password=password, timeout=30)
         sftp = ssh.open_sftp()
         
@@ -90,8 +100,15 @@ def sftp_connect_and_transfer(host, port, username, password, local_path, remote
             print(f"[SUCCESS] Downloaded: {full_remote_path} to {full_local_path}")
             
         elif direction == 'upload':
-            # local_path here is the full path to the file being uploaded
             remote_filename = os.path.basename(local_path)
+            # Ensure the remote path exists before uploading (optional, but good practice)
+            # This requires SFTP permissions to create directories
+            try:
+                sftp.stat(remote_path)
+            except FileNotFoundError:
+                print(f"[INFO] Remote path {remote_path} not found, attempting to create.")
+                sftp.mkdir(remote_path)
+                
             full_remote_path = os.path.join(remote_path, remote_filename).replace('\\', '/')
             sftp.put(local_path, full_remote_path)
             transfer_path = local_path
@@ -124,12 +141,38 @@ def process_file_to_df(file_path, usecols=None):
         print(f"Error reading file {os.path.basename(file_path)}: {e}")
         return pd.DataFrame()
 
+# --- Reusable Data Standardization Helper ---
+
+def standardize_site_col(df, col_name, root_id_col, df_name):
+    """Standardizes Site # and creates the Join_Key."""
+    site_col_present = col_name in df.columns
+    root_col_present = root_id_col in df.columns
+    
+    if site_col_present:
+        df[col_name] = (
+            df[col_name].astype(str)
+            .str.strip()
+            .str.replace(r'\.0$', '', regex=True) 
+            .str.zfill(4) 
+        )
+    else:
+        print(f"Warning: Column '{col_name}' not found in {df_name}. Using empty string for key component.")
+        df[col_name] = ""
+    
+    if not root_col_present:
+        print(f"Warning: Column '{root_id_col}' not found in {df_name}. Using empty string for key component.")
+        df[root_id_col] = "" 
+        
+    df['Join_Key'] = df[root_id_col].astype(str) + df[col_name].astype(str)
+    
+    return df
+
 
 # --- 3. Main Download Logic ---
 
-def download_all_input_files(local_path):
-    """Downloads all three required input files from their respective SFTP hosts."""
-    print("--- Starting Input File Downloads ---")
+def download_rfds_files(local_path):
+    """Downloads all required input files for the RFDS process."""
+    print("--- Starting RFDS Input File Downloads ---")
     
     # File 1: QuickBase_RFDS_CD_TED.xlsx (HOST 1)
     path_qb = sftp_connect_and_transfer(
@@ -152,22 +195,36 @@ def download_all_input_files(local_path):
     columns_to_read_report = ['Site - Project Name', 'Site #', 'CBRS (3.65) Site']
     df_rfds_report = process_file_to_df(path_report, usecols=columns_to_read_report)
     
-    print("\n--- Downloaded File Column Check (Optional Debug) ---")
-    print(f"QuickBase Columns: {df_quickbase.columns.tolist()[:5]}...")
-    print(f"RFDS Status Columns: {df_rfds_status.columns.tolist()[:5]}...")
-    print(f"RFDS Report Columns: {df_rfds_report.columns.tolist()[:5]}...")
-    print("--------------------------------------------------")
-    
     return df_quickbase, df_rfds_status, df_rfds_report
+
+
+def download_cd_ted_reports(local_path):
+    """Downloads the required input report files for the CD and TED processes."""
+    print("\n--- Starting CD/TED Report Downloads ---")
+    
+    # File 1: CD_report_*.csv (HOST 2)
+    path_cd_report = sftp_connect_and_transfer(
+        HOST2, PORT2, USER2, PASS2, local_path, REMOTE_PATH2_CD, file_prefix=FILE_PREFIX_CD, direction='download'
+    )
+    df_cd_report = process_file_to_df(path_cd_report)
+    
+    # File 2: TED_report_*.csv (HOST 2)
+    path_ted_report = sftp_connect_and_transfer(
+        HOST2, PORT2, USER2, PASS2, local_path, REMOTE_PATH2_TED, file_prefix=FILE_PREFIX_TED, direction='download'
+    )
+    df_ted_report = process_file_to_df(path_ted_report)
+    
+    return df_cd_report, df_ted_report
 
 
 # --- 4. RFDS Update Data Processing Function ---
 
-def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
+def RFDS_Update(df_quickbase_orig, df_rfds_status, df_rfds_report, output_path):
     """Performs data manipulation, lookups, filtering, and saves/uploads the final RFDS Update file."""
     
     print("\n--- Starting RFDS Update Data Processing ---")
-    
+    df_quickbase = df_quickbase_orig.copy() # Use a copy
+
     if df_quickbase.empty or df_rfds_status.empty:
         print("Error: QuickBase or RFDS Status data is empty. Cannot proceed.")
         return pd.DataFrame()
@@ -184,42 +241,23 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
     print("Step 1: Filtered QuickBase to exclude 'Viaero Trial'.")
 
     # --- 2. Prepare for Merges (Create Consistent Join Key) ---
-    # The fix for mismatched keys (int vs. padded str) is here.
-    
-    def standardize_site_col(df, col_name, df_name):
-        """Converts Site # to string, removes .0 (from float), strips, and pads with zeroes."""
-        if col_name in df.columns:
-            df[col_name] = (
-                df[col_name].astype(str)
-                .str.strip()
-                .str.replace(r'\.0$', '', regex=True) # Robustly handle if read as float (e.g., '45.0')
-                .str.zfill(4) # Pad with leading zeroes (e.g., '45' -> '0045')
-            )
-            print(f"Step 2 (A): Standardized and padded '{col_name}' in {df_name}.")
-        else:
-            print(f"Warning: Column '{col_name}' not found in {df_name}. Using empty string for key component.")
-            df[col_name] = ""
-            
-        return df
+    df_quickbase = standardize_site_col(df_quickbase, site_col, root_id_col, 'QuickBase')
+    df_rfds_status = standardize_site_col(df_rfds_status, site_col, root_id_col, 'RFDS Status')
+    print("Step 2: Standardized 'Site #' and created 'Join_Key' in QuickBase and RFDS Status.")
 
-    # a. Apply standardization to QuickBase
-    df_quickbase = standardize_site_col(df_quickbase, site_col, 'QuickBase')
-    if root_id_col not in df_quickbase.columns:
-        df_quickbase[root_id_col] = "" # Ensure ID exists for key creation
-    df_quickbase['Join_Key'] = df_quickbase[root_id_col].astype(str) + df_quickbase[site_col].astype(str)
-
-    # b. Apply standardization to RFDS Status
-    df_rfds_status = standardize_site_col(df_rfds_status, site_col, 'RFDS Status')
-    if root_id_col not in df_rfds_status.columns:
-        df_rfds_status[root_id_col] = "" # Ensure ID exists for key creation
-    df_rfds_status['Join_Key'] = df_rfds_status[root_id_col].astype(str) + df_rfds_status[site_col].astype(str)
 
     # --- 3. Handle Duplicates in df_rfds_status ---
     # Sort by 'Join_Key' and 'RFDS', keep the LAST (latest) occurrence
-    df_rfds_status = df_rfds_status.sort_values(
-        by=['Join_Key', 'RFDS'], ascending=[True, True]
-    ).drop_duplicates(subset=['Join_Key'], keep='last').copy()
-    print("Step 3: Handled duplicates in RFDS status file.")
+    if 'RFDS' in df_rfds_status.columns:
+        df_rfds_status = df_rfds_status.sort_values(
+            by=['Join_Key', 'RFDS'], ascending=[True, True], na_position='first'
+        ).drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in RFDS status file.")
+    else:
+        # If RFDS is not available, default to keeping the last row per Join_Key
+        df_rfds_status = df_rfds_status.drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in RFDS status file (no 'RFDS' column, kept last).")
+
     
     # --- 4. VLOOKUP (Merge df_quickbase with df_rfds_status) ---
     status_cols_to_bring = [
@@ -227,7 +265,6 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
         'Project Team Review Status', 'RF Engineer Review Status'
     ]
     
-    # Only select columns that actually exist in the status file
     existing_status_cols = [col for col in status_cols_to_bring if col in df_rfds_status.columns]
     
     status_rename_map = {col: f"{col}_RFDS_STATUS" for col in existing_status_cols}
@@ -253,16 +290,15 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
         missing_cols = []
         if status_qb_col not in df_quickbase.columns: missing_cols.append(status_qb_col)
         if status_status_col_merged not in df_quickbase.columns: missing_cols.append(status_status_col_merged)
-        print(f"🛑 Warning: Missing comparison columns: {', '.join(missing_cols)}. Defaulting to 'OK', which means no updates will be generated.")
+        print(f"🛑 Warning: Missing comparison columns: {', '.join(missing_cols)}. Defaulting to 'OK'.")
     
     # --- 6. VLOOKUP for "CBRS (3.65)Site" from df_rfds_report ---
     if not df_rfds_report.empty and 'Site - Project Name' in df_rfds_report.columns and site_col in df_rfds_report.columns:
         
         # Standardize and pad the Site # for the report file before creating the key
-        df_rfds_report = standardize_site_col(df_rfds_report, site_col, 'RFDS Report')
-        
-        df_rfds_report['Join_Key'] = df_rfds_report['Site - Project Name'].astype(str) + df_rfds_report[site_col].astype(str)
-    
+        df_rfds_report = standardize_site_col(df_rfds_report, site_col, 'Site - Project Name', 'RFDS Report')
+        df_rfds_report.rename(columns={'Site - Project Name': root_id_col}, inplace=True) # Rename root ID for consistent Join_Key
+
         df_quickbase = pd.merge(
             df_quickbase,
             df_rfds_report[['Join_Key', 'CBRS (3.65) Site']],
@@ -275,7 +311,7 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
         print("Warning: RFDS report file is empty or missing key columns. Skipping CBRS lookup.")
 
 
-    # --- 7. Final Filter: Only rows that have the filter "update" ---
+    # --- 7. Final Filter ---
     df_output_filtered = df_quickbase[df_quickbase['Comparison_Result'] == 'Update'].copy()
     print(f"\nFinal Filter applied. Kept {len(df_output_filtered)} rows with 'Update' status.")
 
@@ -296,17 +332,15 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
         'Approval Date_RFDS_STATUS': 'P_QB_RFDS_DATE_APPROVED',
         'CTO Review Status_RFDS_STATUS': 'P_QB_CTO_REVIEW_STATUS',
         'Project Team Review Status_RFDS_STATUS': 'P_QB_PROJECT_TEAM_REVIEW_STATUS',
-        'RF Engineer Review Status_RFDS_STATUS': 'P_QB_RF_ENGINEER_REVIEW_STATUS' # Corrected this map name
+        'RF Engineer Review Status_RFDS_STATUS': 'P_QB_RF_ENGINEER_REVIEW_STATUS'
     }
 
-    # Filter mapping to only include columns present in the filtered output
     final_output_cols = [col for col in mapping.keys() if col in df_output_filtered.columns]
     df_output = df_output_filtered[final_output_cols].rename(columns=mapping)
     print("Step 8: Applied final column mapping.")
 
     
     # --- 9. Create local file named QB_RFDS_yyyymmdd ---
-    os.makedirs(output_path, exist_ok=True)
     current_date = datetime.now().strftime("%Y%m%d")
     file_name = f"QB_RFDS_{current_date}.csv"
     local_full_path = os.path.join(output_path, file_name)
@@ -323,18 +357,272 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
     return df_output
 
 
+# --- 4.1 CD Update Data Processing Function ---
+
+def CD_Update(df_quickbase_orig, df_cd_report, output_path):
+    """
+    Performs data manipulation for Construction Drawings (CD), merging QuickBase
+    with the latest CD Report, filtering for 'Update', and uploading.
+    """
+    
+    print("\n--- Starting CD Update Data Processing ---")
+    df_quickbase = df_quickbase_orig.copy() # Use a copy
+    
+    if df_quickbase.empty or df_cd_report.empty:
+        print("Error: QuickBase or CD Report data is empty. Cannot proceed.")
+        return pd.DataFrame()
+        
+    # Define common column names
+    root_id_col = 'P:Viaero Root ID'
+    site_col = 'Site #'
+    status_qb_col = 'P:[QB] - Preliminary or Final (CD)' 
+    status_report_col_base = 'Construction Drawing Status Text'
+
+    # --- 1. Filter df_quickbase ---
+    column_to_filter = 'WPK:OV Work Package ID'
+    df_quickbase = df_quickbase[~df_quickbase.get(column_to_filter, pd.Series()).astype(str).str.contains('Viaero Trial', na=False, case=False)].copy()
+    print("Step 1: Filtered QuickBase to exclude 'Viaero Trial'.")
+
+    # --- 2. Prepare for Merges (Create Consistent Join Key) ---
+    df_quickbase = standardize_site_col(df_quickbase, site_col, root_id_col, 'QuickBase')
+    df_cd_report = standardize_site_col(df_cd_report, site_col, root_id_col, 'CD Report')
+    print("Step 2: Standardized 'Site #' and created 'Join_Key' in QuickBase and CD Report.")
+    
+    # --- 3. Handle Duplicates in df_cd_report ---
+    if 'Date Created' in df_cd_report.columns:
+        df_cd_report = df_cd_report.sort_values(
+            by=['Join_Key', 'Date Created'], ascending=[True, True], na_position='first'
+        ).drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in CD report file (based on 'Date Created').")
+    else:
+        df_cd_report = df_cd_report.drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in CD report file (no 'Date Created' column, kept last).")
+
+    
+    # --- 4. VLOOKUP (Merge df_quickbase with df_cd_report) ---
+    cd_cols_to_bring = [
+        status_report_col_base, 'Date Created', 'Final Approval Date'
+    ]
+    
+    existing_cd_cols = [col for col in cd_cols_to_bring if col in df_cd_report.columns]
+    
+    cd_rename_map = {col: f"{col}_CD_REPORT" for col in existing_cd_cols}
+    df_cd_for_merge = df_cd_report[['Join_Key'] + existing_cd_cols].rename(columns=cd_rename_map)
+    
+    df_quickbase = pd.merge(df_quickbase, df_cd_for_merge, on='Join_Key', how='left')
+    print("Step 4: Merged QuickBase with CD Report data.")
+    
+    # --- 5. Conditional Logic: IF/THEN/ELSE ---
+    status_report_col_merged = f"{status_report_col_base}_CD_REPORT"
+    
+    if status_qb_col in df_quickbase.columns and status_report_col_merged in df_quickbase.columns:
+        df_quickbase['Comparison_Result'] = np.where(
+            df_quickbase[status_report_col_merged].astype(str).str.strip().str.lower() == 
+            df_quickbase[status_qb_col].astype(str).str.strip().str.lower(),
+            "OK",
+            "Update"
+        )
+        print("Step 5: Applied 'OK'/'Update' comparison logic.")
+    else:
+        df_quickbase['Comparison_Result'] = "OK"
+        print("🛑 Warning: Missing comparison columns. Defaulting to 'OK'.")
+    
+    # --- 6. VLOOKUP for CBRS 3.65 (SKIP) ---
+    print("Step 6: Skipping CBRS (3.65) Site VLOOKUP as requested.")
+
+
+    # --- 7. Final Filter ---
+    df_output_filtered = df_quickbase[df_quickbase['Comparison_Result'] == 'Update'].copy()
+    print(f"\nFinal Filter applied. Kept {len(df_output_filtered)} rows with 'Update' status.")
+
+    if df_output_filtered.empty:
+        return pd.DataFrame()
+        
+    # --- 8. Output File Mapping ---
+    mapping = {
+        'P:Project ID': 'Project ID',
+        'P:[QB] - Purpose of Site Plan (CD)': 'P_QB__PURPOSE_OF_SITE_PLAN',
+        'P:[QB] - Preliminary or Final (CD)': 'P_QB__PRELIMINARY_OR_FINAL',
+        'P:[QB] - Drawing Approval History (CD)': 'P_QB__DRAWING_APPROVAL_HISTORY',
+        'P:[QB] - Redline Approval Notes (CD)': 'P_QB__REDLINE_APPRV_NOTES_CD',
+        'P:[QB] - Document Rejection Notes (TED)': 'P_QB__DRAWING_REJ_NOTES_CD', # Mapped to CD REJECTION NOTES
+        status_report_col_merged: 'P_QB__CONSTR_DRAWING_STATUS', 
+        'Date Created_CD_REPORT': 'P_QB__DATE_CREATED_CD',
+        'Final Approval Date_CD_REPORT': 'P_QB_FINAL_APPROVAL_DATE_CD'
+    }
+
+    final_output_cols = [col for col in mapping.keys() if col in df_output_filtered.columns]
+    df_output = df_output_filtered[final_output_cols].rename(columns=mapping)
+    print("Step 8: Applied final column mapping.")
+
+    
+    # --- 9. Create local file named QB_CD_yyyymmdd.csv ---
+    current_date = datetime.now().strftime("%Y%m%d")
+    file_name = f"QB_CD_{current_date}.csv"
+    local_full_path = os.path.join(output_path, file_name)
+
+    df_output.to_csv(local_full_path, index=False)
+    print(f"\nStep 9: Output file created locally: {local_full_path}")
+
+
+    # --- 10. Update this file in the SFTP path (CD UPLOAD PATH) ---
+    sftp_connect_and_transfer(
+        UPLOAD_HOST, UPLOAD_PORT, UPLOAD_USER, UPLOAD_PASS, local_full_path, UPLOAD_REMOTE_PATH_CD, direction='upload'
+    )
+        
+    return df_output
+
+# --- 4.2 TED Update Data Processing Function ---
+
+def TED_Update(df_quickbase_orig, df_ted_report, output_path):
+    """
+    Performs data manipulation for Technical Engineering Documents (TED), merging QuickBase
+    with the latest TED Report, filtering for 'Update', and uploading.
+    """
+    
+    print("\n--- Starting TED Update Data Processing ---")
+    df_quickbase = df_quickbase_orig.copy() # Use a copy
+    
+    if df_quickbase.empty or df_ted_report.empty:
+        print("Error: QuickBase or TED Report data is empty. Cannot proceed.")
+        return pd.DataFrame()
+        
+    # Define common column names
+    root_id_col = 'P:Viaero Root ID'
+    site_col = 'Site #'
+    status_qb_col = 'Document Review Status Text'
+    status_report_col_base = 'Document Review Status Text'
+
+    # --- 1. Filter df_quickbase ---
+    column_to_filter = 'WPK:OV Work Package ID'
+    df_quickbase = df_quickbase[~df_quickbase.get(column_to_filter, pd.Series()).astype(str).str.contains('Viaero Trial', na=False, case=False)].copy()
+    print("Step 1: Filtered QuickBase to exclude 'Viaero Trial'.")
+
+    # --- 2. Prepare for Merges (Create Consistent Join Key) ---
+    df_quickbase = standardize_site_col(df_quickbase, site_col, root_id_col, 'QuickBase')
+    df_ted_report = standardize_site_col(df_ted_report, site_col, root_id_col, 'TED Report')
+    print("Step 2: Standardized 'Site #' and created 'Join_Key' in QuickBase and TED Report.")
+
+    # --- 3. Handle Duplicates in df_ted_report ---
+    if 'Date Added' in df_ted_report.columns:
+        df_ted_report = df_ted_report.sort_values(
+            by=['Join_Key', 'Date Added'], ascending=[True, True], na_position='first'
+        ).drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in TED report file (based on 'Date Added').")
+    else:
+        df_ted_report = df_ted_report.drop_duplicates(subset=['Join_Key'], keep='last').copy()
+        print("Step 3: Handled duplicates in TED report file (no 'Date Added' column, kept last).")
+    
+    # --- 4. VLOOKUP (Merge df_quickbase with df_ted_report) ---
+    ted_cols_to_bring = [
+        status_report_col_base, 'Date Added', 'Approval Date'
+    ]
+    
+    existing_ted_cols = [col for col in ted_cols_to_bring if col in df_ted_report.columns]
+    
+    ted_rename_map = {col: f"{col}_TED_REPORT" for col in existing_ted_cols}
+    df_ted_for_merge = df_ted_report[['Join_Key'] + existing_ted_cols].rename(columns=ted_rename_map)
+    
+    df_quickbase = pd.merge(df_quickbase, df_ted_for_merge, on='Join_Key', how='left')
+    print("Step 4: Merged QuickBase with TED Report data.")
+    
+    # --- 5. Conditional Logic: IF/THEN/ELSE ---
+    status_report_col_merged = f"{status_report_col_base}_TED_REPORT"
+    
+    if status_qb_col in df_quickbase.columns and status_report_col_merged in df_quickbase.columns:
+        df_quickbase['Comparison_Result'] = np.where(
+            df_quickbase[status_report_col_merged].astype(str).str.strip().str.lower() == 
+            df_quickbase[status_qb_col].astype(str).str.strip().str.lower(),
+            "OK",
+            "Update"
+        )
+        print("Step 5: Applied 'OK'/'Update' comparison logic.")
+    else:
+        df_quickbase['Comparison_Result'] = "OK"
+        print("🛑 Warning: Missing comparison columns. Defaulting to 'OK'.")
+    
+    # --- 6. VLOOKUP for CBRS 3.65 (SKIP) ---
+    print("Step 6: Skipping CBRS (3.65) Site VLOOKUP as requested.")
+
+
+    # --- 7. Final Filter ---
+    df_output_filtered = df_quickbase[df_quickbase['Comparison_Result'] == 'Update'].copy()
+    print(f"\nFinal Filter applied. Kept {len(df_output_filtered)} rows with 'Update' status.")
+
+    if df_output_filtered.empty:
+        return pd.DataFrame()
+        
+    # --- 8. Output File Mapping ---
+    mapping = {
+        'P:Project ID': 'Project ID',
+        'P:Type of Document (TED)': 'P_TYPE_OF_DOCUMENT_TED',
+        status_report_col_merged: 'P_QB_DOC_REVIEW_STATUS_TEXT', 
+        'P:[QB] - Document Redline Notes (TED)': 'P_QB_DOC_REDLINE_NOTES_TED',
+        'P:[QB] - Document Rejection Notes (TED)': 'P_QB_DOCUMENT_REJECTION_NOTES',
+        'Date Added_TED_REPORT': 'P_QB__DATE_ADDED_TED',
+        'Approval Date_TED_REPORT': 'P_QB__DATE_APPROVED_TED'
+    }
+
+    final_output_cols = [col for col in mapping.keys() if col in df_output_filtered.columns]
+    df_output = df_output_filtered[final_output_cols].rename(columns=mapping)
+    print("Step 8: Applied final column mapping.")
+
+    
+    # --- 9. Create local file named QB_TED_yyyymmdd.csv ---
+    current_date = datetime.now().strftime("%Y%m%d")
+    file_name = f"QB_TED_{current_date}.csv"
+    local_full_path = os.path.join(output_path, file_name)
+
+    df_output.to_csv(local_full_path, index=False)
+    print(f"\nStep 9: Output file created locally: {local_full_path}")
+
+
+    # --- 10. Update this file in the SFTP path (TED UPLOAD PATH) ---
+    sftp_connect_and_transfer(
+        UPLOAD_HOST, UPLOAD_PORT, UPLOAD_USER, UPLOAD_PASS, local_full_path, UPLOAD_REMOTE_PATH_TED, direction='upload'
+    )
+        
+    return df_output
+
+
 # --- 5. Execution Block ---
 
 if __name__ == "__main__":
     
-    # 1. Download all required files
-    df_qb, df_status, df_report = download_all_input_files(LOCAL_BASE_PATH)
+    # Check if this is running in an environment where paramiko can be installed/used
+    # This is a defensive check, remove if not needed
+    if 'paramiko' not in sys.modules:
+        print("Warning: paramiko module may not be imported or available. SFTP operations will likely fail.")
+        # Continue execution, assuming the user will resolve the environment issue.
 
-    # 2. Run the processing and upload
-    final_df = RFDS_Update(df_qb, df_status, df_report, LOCAL_BASE_PATH)
-
-    print("\n--- Process Complete ---")
-    if not final_df.empty:
-        print(f"Final records processed and uploaded: {len(final_df)} rows.")
+    # --- PART 1: Download Required Files ---
+    print("--- Starting All Downloads ---")
+    
+    # RFDS-related files (includes the main QuickBase file)
+    df_qb_orig, df_rfds_status, df_rfds_report = download_rfds_files(LOCAL_BASE_PATH)
+    
+    # CD and TED reports
+    df_cd_report, df_ted_report = download_cd_ted_reports(LOCAL_BASE_PATH)
+    
+    if df_qb_orig.empty:
+        print("\nFATAL ERROR: QuickBase file could not be loaded. Halting all processing.")
     else:
-        print("No 'Update' records were generated. No file was created or uploaded.")
+        # --- PART 2: RFDS Update Process ---
+        print("\n\n=============== Starting RFDS Update Process ===============")
+        final_df_rfds = RFDS_Update(df_qb_orig, df_rfds_status, df_rfds_report, LOCAL_BASE_PATH)
+        print("=============== RFDS Update Process Complete ===============")
+
+        # --- PART 3: CD Update Process ---
+        print("\n\n================= Starting CD Update Process =================")
+        final_df_cd = CD_Update(df_qb_orig, df_cd_report, LOCAL_BASE_PATH)
+        print("================= CD Update Process Complete =================")
+
+        # --- PART 4: TED Update Process ---
+        print("\n\n================= Starting TED Update Process ================")
+        final_df_ted = TED_Update(df_qb_orig, df_ted_report, LOCAL_BASE_PATH)
+        print("================= TED Update Process Complete ================")
+
+        print("\n--- All Processes Finished ---")
+        print(f"RFDS Records Updated: {len(final_df_rfds) if not final_df_rfds.empty else 0}")
+        print(f"CD Records Updated: {len(final_df_cd) if not final_df_cd.empty else 0}")
+        print(f"TED Records Updated: {len(final_df_ted) if not final_df_ted.empty else 0}")
