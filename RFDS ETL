@@ -1,40 +1,36 @@
-import pandas as pd
-import paramiko
-import os
-from datetime import datetime
-import numpy as np
+Hi, please help me with below points:
 
-# --- 1. Configuration (MOCK VALUES - REPLACE WITH YOUR ACTUALS) ---
-# NOTE: Replace these placeholder values with your real SFTP credentials and paths.
 
-# SFTP HOST 1 (QuickBase)
-HOST1 = "sftp.host1.com"
-PORT1 = 22
-USER1 = "user1"
-PASS1 = "password1"
-REMOTE_PATH1_QB = "/remote/path/to/quickbase/"
-FILE_NAME_QB = "QuickBase_RFDS_CD_TED.xlsx"
+1. I need to create a funtion named CD, with the same logic that we did for the funtion before. 
+   The only thing that we need to do, is change the output file name to QB_CD_yyyymmdd.csv and upload in a different location /var/data/Support_Data/quickbase/CD/; we dont need to do the vlookup for the columns CBRS 3.65 
 
-# SFTP HOST 2 (RFDS Status & Report)
-HOST2 = "sftp.host2.com"
-PORT2 = 22
-USER2 = "user2"
-PASS2 = "password2"
-REMOTE_PATH2_STATUS = "/remote/path/to/rfds/status/"
-FILE_PREFIX_STATUS = "RFDS_status_report_"
-REMOTE_PATH2_REPORT = "/remote/path/to/rfds/report/"
-FILE_PREFIX_REPORT = "RFDS_report_"
+Below the mapping:
+ 
+source	input	output
+QuickBase_RFDS_CD_TED	P:Project ID	Project ID
+QuickBase_RFDS_CD_TED	P:[QB] - Purpose of Site Plan (CD)	P_QB__PURPOSE_OF_SITE_PLAN
+QuickBase_RFDS_CD_TED	P:[QB] - Preliminary or Final (CD)	P_QB__PRELIMINARY_OR_FINAL
+QuickBase_RFDS_CD_TED	P:[QB] - Drawing Approval History (CD)	P_QB__DRAWING_APPROVAL_HISTORY
+QuickBase_RFDS_CD_TED	P:[QB] - Redline Approval Notes (CD)	P_QB__REDLINE_APPRV_NOTES_CD
+QuickBase_RFDS_CD_TED	P:[QB] - Document Rejection Notes (TED)	P_QB__DRAWING_REJ_NOTES_CD
+CD_report_	Construction Drawing Status Text	P_QB__CONSTR_DRAWING_STATUS
+CD_report_	Date Created	P_QB__DATE_CREATED_CD
+CD_report_	Final Approval Date	P_QB_FINAL_APPROVAL_DATE_CD
 
-# UPLOAD HOST (Where the final output goes)
-UPLOAD_HOST = "sftp.uploadhost.com"
-UPLOAD_PORT = 22
-UPLOAD_USER = "upload_user"
-UPLOAD_PASS = "upload_password"
-UPLOAD_REMOTE_PATH = "/remote/path/for/output/"
+2. I need to create thirt funtion named TED, with the same logic that we did for the funtion before. 
+   The only thing that we need to do, is change the output file to QB_TED_yyyymmdd.csv and upload in a different location /var/data/Support_Data/quickbase/TED/; we dont need to do the vlookup for the columns CBRS 3.65 
 
-# Local Paths and File Settings
-LOCAL_BASE_PATH = os.path.join(os.getcwd(), 'sftp_files')
-FILE_EXTENSION = ".csv"
+Below the mapping:
+
+source	input	output
+QuickBase_RFDS_CD_TED	P:Project ID	Project ID
+QuickBase_RFDS_CD_TED	P:Type of Document (TED)	P_TYPE_OF_DOCUMENT_TED
+QuickBase_RFDS_CD_TED	Document Review Status Text	P_QB_DOC_REVIEW_STATUS_TEXT
+QuickBase_RFDS_CD_TED	P:[QB] - Document Redline Notes (TED)	P_QB_DOC_REDLINE_NOTES_TED
+QuickBase_RFDS_CD_TED	P:[QB] - Document Rejection Notes (TED)	P_QB_DOCUMENT_REJECTION_NOTES
+TED_report_	Date Added	P_QB__DATE_ADDED_TED
+TED_report_	Approval Date	P_QB__DATE_APPROVED_TED
+
 
 # --- 2. SFTP Helper Functions ---
 
@@ -342,4 +338,3 @@ if __name__ == "__main__":
         print(f"Final records processed and uploaded: {len(final_df)} rows.")
     else:
         print("No 'Update' records were generated. No file was created or uploaded.")
-
