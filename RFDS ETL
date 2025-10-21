@@ -1,25 +1,209 @@
-I forgot something. 
+import pandas as pd
+import numpy as np
+import paramiko
+import os
+from datetime import datetime
+import io 
+# from ayx import Alteryx # Uncomment this if running in Alteryx Designer
 
-1. In the output file we'll add only the rows that has the filter "update"
-2. For FTP upudate file, I want this format: 
-# --- 8. Update this file in the SFTP path ---
-host = '54.225.75.239'
-port = 22
-username = 'XXXX'
-password = 'XXXX'
-remote_file_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/RFDS/'
-3. Please see below the source, input and output, update the code. 
-SOURCE	input	output
-QuickBase_RFDS_CD_TED.xlsx	P:Project ID	Project ID
-RFDS_report_	CBRS (3.65) Site	P_QB_CBRS_365_SITE
-QuickBase_RFDS_CD_TED.xlsx	P:[QB] Conditional Tower Top	P_QB_CONDITIONAL_TOWER_TOP
-QuickBase_RFDS_CD_TED.xlsx	P:[QB] RFDS Vendor Notes	P_QB_RFDS_VENDOR_NOTES
-QuickBase_RFDS_CD_TED.xlsx	P:[QB] RFDS Approval History	P_QB_RFDS_APPROVAL_HISTORY
-QuickBase_RFDS_CD_TED.xlsx	P:[QB] RFDS Redline Notes	P_QB_RFDS_REDLINE_NOTES
-QuickBase_RFDS_CD_TED.xlsx	P:[QB] RFDS Rejection Notes	P_QB_RFDS_REJECTION_NOTES
-RFDS_status_report_	RFDS Review Status Text	P_QB_RFDS_REVIEW_STATUS_TEXT
-RFDS_status_report_	Date Added	P_QB_DATE_ADDED
-RFDS_status_report_	Approval Date	P_QB_RFDS_DATE_APPROVED
-RFDS_status_report_	CTO Review Status	P_QB_CTO_REVIEW_STATUS
-RFDS_status_report_	Project Team Review Status	P_QB_PROJECT_TEAM_REVIEW_STATUS
-RFDS_status_report_	RF Engineer Review Status	P_QB_RF_ENGINEER_REVIEW_STATUS
+# --- 2. SFTP Upload Function ---
+def upload_file_to_sftp(local_file_path, remote_file_path, host, port, username, password):
+    """Uploads a single file to an SFTP server."""
+    print("Starting SFTP file upload...")
+    ssh = None
+    sftp = None
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        remote_full_path = os.path.join(remote_file_path, os.path.basename(local_file_path))
+        sftp.put(local_file_path, remote_full_path)
+        print(f"File uploaded successfully to {remote_full_path}")
+        return True
+
+    except Exception as e:
+        print(f"An error occurred during SFTP upload: {e}")
+        return False
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+# --- 9. RFDS Update Function (Updated) ---
+def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
+    """
+    Performs data manipulation, lookups, conditional logic, and SFTP upload 
+    on the QuickBase and RFDS status/report files.
+
+    Args:
+        df_quickbase (pd.DataFrame): Data from QuickBase_RFDS_CD_TED.xlsx.
+        df_rfds_status (pd.DataFrame): Data from the latest RFDS_status_report_*.csv.
+        df_rfds_report (pd.DataFrame): Data from the latest RFDS_report_*.csv.
+        output_path (str): Local directory path to save the output file.
+    
+    Returns:
+        pd.DataFrame: The final processed and filtered DataFrame.
+    """
+    
+    print("Starting RFDS Update process...")
+    status_status_col_new = 'RFDS Review Status Text_RFDS_STATUS'
+    
+    # --- 1. Filter df_quickbase ---
+    column_to_filter = 'WPK:OV Work Package ID'
+    if column_to_filter in df_quickbase.columns:
+        initial_rows = len(df_quickbase)
+        df_quickbase = df_quickbase[~df_quickbase[column_to_filter].astype(str).str.contains('Viaero Trial', na=False, case=False)]
+        print(f"1. Filtered '{column_to_filter}'. Removed {initial_rows - len(df_quickbase)} rows containing 'Viaero Trial'.")
+    else:
+        print(f"Warning: Column '{column_to_filter}' not found in QuickBase file.")
+
+    # --- 2. Complete "site #" in df_rfds_status with "0" until 4 digits ---
+    site_col = 'site #'
+    if site_col in df_rfds_status.columns:
+        df_rfds_status[site_col] = df_rfds_status[site_col].astype(str).str.strip().str.zfill(4)
+        print("2. Padded 'site #' in RFDS status file to 4 digits with leading zeros.")
+    else:
+        print(f"Warning: Column '{site_col}' not found in RFDS status file.")
+
+
+    # --- Prepare for Merges ---
+    df_quickbase['Join_Key'] = df_quickbase['P:Viaero Root ID'].astype(str) + df_quickbase['site #'].astype(str)
+    
+    required_cols_status = ['P:Viaero Root ID', site_col, 'RFDS Review Status Text', 'RFDS', 
+                            'Date Added', 'Approval Date', 'CTO Review Status', 
+                            'Project Team Review Status', 'RF Engineer Review Status']
+
+    if all(col in df_rfds_status.columns for col in required_cols_status):
+        df_rfds_status['Join_Key'] = df_rfds_status['P:Viaero Root ID'].astype(str) + df_rfds_status[site_col].astype(str)
+        
+        # --- 4. Handle Duplicates in df_rfds_status (Use 'RFDS' to bring the latest data) ---
+        df_rfds_status = df_rfds_status.sort_values(by=['Join_Key', 'RFDS'], ascending=[True, True]).drop_duplicates(subset=['Join_Key'], keep='last')
+        print("4. Handled duplicates in RFDS status file.")
+    else:
+        print("Error: Missing required columns in RFDS status file for joining/deduplication.")
+        df_rfds_status['Join_Key'] = ''
+        
+    # --- 3. VLOOKUP (Merge df_quickbase with df_rfds_status) ---
+    cols_to_bring_status = ['Join_Key'] + [col for col in required_cols_status if col not in ['P:Viaero Root ID', site_col, 'RFDS']]
+    
+    # Rename columns from status file before merge to prevent name conflicts and ensure mapping
+    status_rename_map = {col: f"{col}_RFDS_STATUS" for col in cols_to_bring_status if col != 'Join_Key'}
+    df_rfds_status_merged = df_rfds_status[cols_to_bring_status].rename(columns=status_rename_map)
+
+    df_quickbase = pd.merge(
+        df_quickbase,
+        df_rfds_status_merged,
+        on='Join_Key',
+        how='left'
+    )
+    print("3. Merged QuickBase with RFDS Status data.")
+
+
+    # --- 5. Conditional Logic: IF/THEN/ELSE ---
+    status_qb_col = 'OV RFDS Review Status Text' 
+    status_status_col = 'RFDS Review Status Text_RFDS_STATUS' 
+
+    if status_qb_col in df_quickbase.columns and status_status_col in df_quickbase.columns:
+        df_quickbase['Comparison_Result'] = np.where(
+            df_quickbase[status_status_col] == df_quickbase[status_qb_col], 
+            "OK", 
+            "Update"
+        )
+        print("5. Applied 'OK'/'Update' comparison logic.")
+    else:
+        print(f"Warning: Columns for comparison ('{status_qb_col}' or '{status_status_col}') not found. Skipping Step 5.")
+        df_quickbase['Comparison_Result'] = "OK" # Default to 'OK' if comparison fails
+
+    
+    # --- 6. VLOOKUP for "CBRS (3.65)Site" from df_rfds_report ---
+    required_cols_report = ['Site - Project Name', 'Site #', 'CBRS (3.65) Site']
+    if all(col in df_rfds_report.columns for col in required_cols_report):
+        df_rfds_report['Join_Key'] = df_rfds_report['Site - Project Name'].astype(str) + df_rfds_report['Site #'].astype(str).str.strip().str.zfill(4)
+        cols_to_bring_report = ['Join_Key', 'CBRS (3.65) Site']
+        
+        df_quickbase = pd.merge(
+            df_quickbase,
+            df_rfds_report[cols_to_bring_report],
+            on='Join_Key',
+            how='left'
+        )
+        print("6. VLOOKUP done to bring 'CBRS (3.65) Site' from RFDS report.")
+    else:
+        print("Error: Missing required columns in RFDS report file for lookup.")
+        df_quickbase['CBRS (3.65) Site'] = np.nan # Add an empty column if lookup fails
+
+    
+    # --- 1. Filter the output file to include only "Update" rows ---
+    df_output_filtered = df_quickbase[df_quickbase['Comparison_Result'] == 'Update'].copy()
+    print(f"1. Final filter applied. Kept {len(df_output_filtered)} rows with 'Update' status.")
+
+    if df_output_filtered.empty:
+        print("No rows meet the 'Update' criteria. Skipping file creation and upload.")
+        return df_output_filtered
+        
+    # --- 10. Output File Mapping ---
+    
+    mapping = {
+        'P:Project ID': 'Project ID',
+        'CBRS (3.65) Site': 'P_QB_CBRS_365_SITE',
+        'P:[QB] Conditional Tower Top': 'P_QB_CONDITIONAL_TOWER_TOP',
+        'P:[QB] RFDS Vendor Notes': 'P_QB_RFDS_VENDOR_NOTES',
+        'P:[QB] RFDS Approval History': 'P_QB_RFDS_APPROVAL_HISTORY',
+        'P:[QB] RFDS Redline Notes': 'P_QB_RFDS_REDLINE_NOTES',
+        'P:[QB] RFDS Rejection Notes': 'P_QB_RFDS_REJECTION_NOTES',
+        'RFDS Review Status Text_RFDS_STATUS': 'P_QB_RFDS_REVIEW_STATUS_TEXT', 
+        'Date Added_RFDS_STATUS': 'P_QB_DATE_ADDED',
+        'Approval Date_RFDS_STATUS': 'P_QB_RFDS_DATE_APPROVED',
+        'CTO Review Status_RFDS_STATUS': 'P_QB_CTO_REVIEW_STATUS',
+        'Project Team Review Status_RFDS_STATUS': 'P_QB_PROJECT_TEAM_REVIEW_STATUS',
+        'RF Engineer Review Status_RFDS_STATUS': 'P_QB_RF_ENGINEER_REVIEW_STATUS'
+    }
+
+    # Select and rename columns
+    final_cols = [col for col in mapping.keys() if col in df_output_filtered.columns]
+    df_output = df_output_filtered[final_cols].rename(columns=mapping)
+    print("10. Applied final column mapping.")
+
+    
+    # --- 7. Create a file named QB_RFDS_yyyymmdd ---
+    current_date = datetime.now().strftime("%Y%m%d")
+    file_name = f"QB_RFDS_{current_date}.csv"
+    local_full_path = os.path.join(output_path, file_name)
+
+    # Save locally as CSV
+    df_output.to_csv(local_full_path, index=False)
+    print(f"7. Output file created locally: {local_full_path}")
+
+
+    # --- 8. Update this file in the SFTP path (using provided format) ---
+    # NOTE: Replace 'XXXX' with the actual credentials
+    host = '54.225.75.239'
+    port = 22
+    username = 'XXXX'
+    password = 'XXXX'
+    remote_file_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/RFDS/'
+    
+    upload_file_to_sftp(local_full_path, remote_file_path, host, port, username, password)
+        
+    return df_output
+
+# --- Integration into main script (Example) ---
+
+# This section assumes your initial script successfully downloads the files 
+# and processes them into three DataFrames: df1, df2, and df3.
+# You would replace the placeholder assignments below with Alteryx.read() calls.
+
+# # Example of how to call the function:
+# # df1 = Alteryx.read(1) # df_quickbase (QuickBase_RFDS_CD_TED.xlsx)
+# # df2 = Alteryx.read(2) # df_rfds_status (RFDS_status_report_*.csv)
+# # df3 = Alteryx.read(5) # df_rfds_report (RFDS_report_*.csv) # Using output 5 from previous block
+
+# # output_directory = network_path # Using the local path defined in the initial script
+
+# # final_output_df = RFDS_Update(df1, df2, df3, output_directory)
+
+# # if not final_output_df.empty:
+# #     Alteryx.write(final_output_df, 1) # Write the final output to Alteryx tool output 1
