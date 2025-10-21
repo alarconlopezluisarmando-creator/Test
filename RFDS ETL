@@ -1,45 +1,16 @@
-import pandas as pd
-import numpy as np
-import paramiko
-import os
-from datetime import datetime
-import openpyxl # Needed for reading .xlsx files
-from io import StringIO
 
-# --- 1. SFTP CREDENTIALS AND CONFIGURATION ---
+[954 rows x 36 columns]
+Column 'Site #' not found in df_quickbase. Using default value.
+Column 'P:Viaero Root ID' not found in df_rfds_status. Using default value.
+Step 4: Handled duplicates in RFDS status file.
+Step 3: Merged QuickBase with RFDS Status data.
+Warning: Missing comparison columns. Defaulting to 'OK'.
+Step 6: VLOOKUP done to bring 'CBRS (3.65) Site'.
 
-# 1.1 SFTP HOST 1: For QuickBase_RFDS_CD_TED.xlsx
-HOST1 = 'xxx' # Replace with actual host
-PORT1 = 22
-USER1 = 'xx'  # Replace with actual user
-PASS1 = 'xx'  # Replace with actual password
-REMOTE_PATH1_QB = '/home/samsung_sea2/es/Rancomm/'
-FILE_NAME_QB = 'QuickBase_RFDS_CD_TED.xlsx'
+Final Filter applied. Kept 0 rows with 'Update' status.
 
-# 1.2 SFTP HOST 2: For RFDS_status_report_*.csv and RFDS_report_*.csv
-# NOTE: Using the same host/port/user/pass for all /var/data/... files as implied
-# by the original structure, but separating them logically.
-HOST2 = 'xxx' # Replace with actual host (likely the one from the original snippet)
-PORT2 = 22
-USER2 = 'xxxx' # Replace with actual user
-PASS2 = 'xxxx' # Replace with actual password
-REMOTE_PATH2_STATUS = '/var/data/Support_Data/quickbase/RFDS_status/'
-REMOTE_PATH2_REPORT = '/var/data/Support_Data/quickbase/RFDS_3days/'
-FILE_PREFIX_STATUS = 'RFDS_status_report_'
-FILE_PREFIX_REPORT = 'RFDS_report_'
-FILE_EXTENSION = '.csv'
-
-# 1.3 SFTP HOST 3: For the Final Upload
-UPLOAD_HOST = '54.225.75.239'
-UPLOAD_PORT = 22
-UPLOAD_USER = 'XXXX'
-UPLOAD_PASS = 'XXXX' # Replace with actual password
-UPLOAD_REMOTE_PATH = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/RFDS/'
-
-# Local directory for downloaded and output files
-LOCAL_BASE_PATH = './sftp_local_data' 
-
-
+--- Process Complete ---
+No 'Update' records were generated. No file was created or uploaded.
 # --- 2. SFTP Helper Functions (Re-using/Refining your initial code) ---
 
 def get_latest_file(sftp, remote_file_path, file_prefix, file_extension):
@@ -90,16 +61,16 @@ def sftp_connect_and_transfer(host, port, username, password, local_path, remote
             full_local_path = os.path.join(local_path, remote_filename)
             sftp.get(full_remote_path, full_local_path)
             transfer_path = full_local_path
-            print(f"✅ Downloaded: {full_remote_path} to {full_local_path}")
+            print(f"[SUCCESS] Downloaded: {full_remote_path} to {full_local_path}")
             
         elif direction == 'upload':
             full_remote_path = os.path.join(remote_path, os.path.basename(local_path)).replace('\\', '/')
             sftp.put(local_path, full_remote_path)
             transfer_path = local_path
-            print(f"✅ Uploaded: {local_path} to {full_remote_path}")
+            print(f"[SUCCESS] Uploaded: {local_path} to {full_remote_path}")
 
     except Exception as e:
-        print(f"❌ SFTP {direction} error: {e}")
+        print(f"[ERROR] SFTP {direction} error: {e}")
     finally:
         if sftp: sftp.close()
         if ssh: ssh.close()
@@ -115,7 +86,7 @@ def process_file_to_df(file_path, usecols=None):
             df = pd.read_excel(file_path, engine='openpyxl', usecols=usecols)
         elif file_path.endswith('.csv'):
             df = pd.read_csv(file_path, usecols=usecols)
-        print(f"✅ Successfully read file: {os.path.basename(file_path)}")
+        print(f"[SUCCESS] Successfully read file: {os.path.basename(file_path)}")
         return df
     except Exception as e:
         print(f"Error reading file {os.path.basename(file_path)}: {e}")
@@ -168,14 +139,43 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
     df_quickbase = df_quickbase[~df_quickbase[column_to_filter].astype(str).str.contains('Viaero Trial', na=False, case=False)].copy()
     print("Step 1: Filtered QuickBase to exclude 'Viaero Trial'.")
 
-    # --- 2. Complete "site #" in df_rfds_status with "0" until 4 digits ---
-    site_col = 'site #'
+    # --- 2. Complete "Site #" in df_rfds_status with "0" until 4 digits ---
+    site_col = 'Site #'
+    print (df_rfds_status)
     df_rfds_status[site_col] = df_rfds_status[site_col].astype(str).str.strip().str.zfill(4)
-    print("Step 2: Padded 'site #' in RFDS status file.")
+    print("Step 2: Padded 'Site #' in RFDS status file.")
     
     # --- Prepare for Merges (Create Join Key) ---
-    df_quickbase['Join_Key'] = df_quickbase['P:Viaero Root ID'].astype(str) + df_quickbase['site #'].astype(str)
-    df_rfds_status['Join_Key'] = df_rfds_status['P:Viaero Root ID'].astype(str) + df_rfds_status[site_col].astype(str)
+    print(df_quickbase)
+    
+    # Check and handle the 'Site #' column in df_quickbase
+    site_col = 'Site #'
+    if site_col not in df_quickbase.columns:
+        print(f"Column '{site_col}' not found in df_quickbase. Using default value.")
+        df_quickbase[site_col] = 0  # or an empty string if it should be a string
+    
+    df_quickbase['Join_Key'] = df_quickbase['P:Viaero Root ID'].astype(str) + df_quickbase[site_col].astype(str)
+    
+    # Check and handle the 'Site #' column in df_rfds_status
+    if site_col not in df_rfds_status.columns:
+        print(f"Column '{site_col}' not found in df_rfds_status. Using default value.")
+        df_rfds_status[site_col] = 0  # or an empty string if it should be a string
+    
+    # Define the column names
+    root_id_col = 'P:Viaero Root ID'
+    site_col = 'Site #'  # or the correct column name
+    
+    # Check if the columns exist in df_rfds_status
+    if root_id_col not in df_rfds_status.columns:
+        print(f"Column '{root_id_col}' not found in df_rfds_status. Using default value.")
+        df_rfds_status[root_id_col] = 0  # or an empty string if it should be a string
+    
+    if site_col not in df_rfds_status.columns:
+        print(f"Column '{site_col}' not found in df_rfds_status. Using default value.")
+        df_rfds_status[site_col] = 0  # or an empty string if it should be a string
+    
+    # Create the 'Join_Key' column
+    df_rfds_status['Join_Key'] = df_rfds_status[root_id_col].astype(str) + df_rfds_status[site_col].astype(str)
     
     # --- 4. Handle Duplicates in df_rfds_status ---
     # Sort by 'Join_Key' and 'RFDS', keep the LAST (latest) occurrence
@@ -184,36 +184,35 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
     
     # --- 3. VLOOKUP (Merge df_quickbase with df_rfds_status) ---
     status_cols_to_bring = [
-        'RFDS Review Status Text', 'Date Added', 'Approval Date', 'CTO Review Status', 
+        'RFDS Review Status Text', 'Date Added', 'Approval Date', 'CTO Review Status',
         'Project Team Review Status', 'RF Engineer Review Status'
     ]
     
     status_rename_map = {col: f"{col}_RFDS_STATUS" for col in status_cols_to_bring}
     df_status_for_merge = df_rfds_status[['Join_Key'] + status_cols_to_bring].rename(columns=status_rename_map)
-
+    
     df_quickbase = pd.merge(df_quickbase, df_status_for_merge, on='Join_Key', how='left')
     print("Step 3: Merged QuickBase with RFDS Status data.")
-
+    
     # --- 5. Conditional Logic: IF/THEN/ELSE ---
-    status_qb_col = 'OV RFDS Review Status Text' 
-    status_status_col = 'RFDS Review Status Text_RFDS_STATUS' 
+    status_qb_col = 'OV RFDS Review Status Text'
+    status_status_col = 'RFDS Review Status Text_RFDS_STATUS'
     
     if status_qb_col in df_quickbase.columns and status_status_col in df_quickbase.columns:
         df_quickbase['Comparison_Result'] = np.where(
-            df_quickbase[status_status_col].astype(str) == df_quickbase[status_qb_col].astype(str), 
-            "OK", 
+            df_quickbase[status_status_col].astype(str) == df_quickbase[status_qb_col].astype(str),
+            "OK",
             "Update"
         )
         print("Step 5: Applied 'OK'/'Update' comparison logic.")
     else:
-        df_quickbase['Comparison_Result'] = "OK" 
+        df_quickbase['Comparison_Result'] = "OK"
         print("Warning: Missing comparison columns. Defaulting to 'OK'.")
-        
     
     # --- 6. VLOOKUP for "CBRS (3.65)Site" from df_rfds_report ---
     if not df_rfds_report.empty:
         df_rfds_report['Join_Key'] = df_rfds_report['Site - Project Name'].astype(str) + df_rfds_report['Site #'].astype(str).str.strip().str.zfill(4)
-        
+    
         df_quickbase = pd.merge(
             df_quickbase,
             df_rfds_report[['Join_Key', 'CBRS (3.65) Site']],
@@ -232,8 +231,7 @@ def RFDS_Update(df_quickbase, df_rfds_status, df_rfds_report, output_path):
 
     if df_output_filtered.empty:
         return pd.DataFrame()
-        
-    # --- 10. Output File Mapping ---
+           # --- 10. Output File Mapping ---
     mapping = {
         'P:Project ID': 'Project ID',
         'CBRS (3.65) Site': 'P_QB_CBRS_365_SITE',
