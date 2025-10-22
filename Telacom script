@@ -1,111 +1,101 @@
 def download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix):
+    print(f"Attempting to connect to {host}:{port} for files starting with '{file_prefix}'...")
+    
+    # Define a regex pattern to find a timestamp (YYYYMMDD or similar) for sorting
+    # This assumes the date/timestamp is the most reliable part for determining "latest".
+    # Adjust this regex if your file names have a different date/time format.
+    DATE_PATTERN = r'(\d{8,})' 
+
+    transport = None
+    sftp = None
     try:
         transport = paramiko.Transport((host, port))
         transport.connect(username=username, password=password)
         sftp = paramiko.SFTPClient.from_transport(transport)
         
         files = sftp.listdir(remote_file_path)
-        files = [file for file in files if file.startswith(file_prefix)]
-        files.sort(reverse=True)
         
-        if files:
-            latest_file = files[0]
-            local_file_path = os.path.join(network_path, latest_file)
-            sftp.get(os.path.join(remote_file_path, latest_file), local_file_path)
-            sftp.close()
-            transport.close()
-            return local_file_path
-        else:
-            sftp.close()
-            transport.close()
+        # 1. Filter and Prepare files for robust sorting
+        target_files = []
+        for file in files:
+            if file.startswith(file_prefix):
+                match = re.search(DATE_PATTERN, file)
+                if match:
+                    # Use the extracted date string for sorting key
+                    date_key = match.group(1)
+                    target_files.append((file, date_key))
+                else:
+                    # Fallback for files without a date, use filename as key
+                    target_files.append((file, file)) 
+        
+        if not target_files:
+            print(f"No files found starting with '{file_prefix}' in '{remote_file_path}'.")
             return None
+
+        # 2. Sort by the extracted date key (reverse=True for latest)
+        target_files.sort(key=lambda x: x[1], reverse=True)
+        
+        latest_file = target_files[0][0]
+        
+        local_file_path = os.path.join(network_path, latest_file)
+        remote_full_path = os.path.join(remote_file_path, latest_file)
+        
+        print(f"Latest file found: {latest_file}. Downloading to {local_file_path}...")
+        
+        sftp.get(remote_full_path, local_file_path)
+        
+        print("Download successful.")
+        return local_file_path
+        
     except Exception as e:
-        print(f"An error occurred during file download: {e}")
+        print(f"An error occurred during file download for prefix '{file_prefix}': {e}")
         return None
+    finally:
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
+        
+# The upload_file_to_sftp, download_and_process_files, and process_files functions remain mostly the same. 
+# Only process_files is shown below for a small fix.
 
 def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
-    try:
-        transport = paramiko.Transport((host, port))
-        transport.connect(username=username, password=password)
-        sftp = paramiko.SFTPClient.from_transport(transport)
-        
-        file_name = os.path.basename(file_path)
-        sftp.put(file_path, os.path.join(remote_path, file_name))
-        sftp.close()
-        transport.close()
-    except Exception as e:
-        print(f"An error occurred during file upload: {e}")
-
-def download_and_process_files():
-    try:
-        network_path = r'C:\Users\l5.lopez\Downloads\00_to delete'
-        
-        # SFTP credentials
-        host1 = 'ftp.onevizion.com'
-        port1 = 22
-        username1 = 'xx'
-        password1 = 'xx'
-        remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
-        file_prefix1 = 'Telamon_report_'
-        
-        host2 = '105.52.12.194'
-        port2 = 1022
-        username2 = 'xx'
-        password2 = 'xx'
-        remote_file_path2 = '/var/data/Support_Data/quickbase/Telamon'
-        file_prefix2 = '44020_Daily_OV_Update'
-
-        # Download files
-        tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
-        quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
-
-        if tracker_file_path and quotes_file_path:
-            process_files(quotes_file_path, tracker_file_path, network_path)
-        else:
-            print("One or both files failed to download. Comparison aborted.")
-    except Exception as e:
-        print(f"An error occurred during file processing: {e}")
+    # ... (Keep this function as is)
+    pass 
 
 def process_files(quotes_file_path, tracker_file_path, network_path):
     # Read the files
     telamon_df = pd.read_csv(tracker_file_path)
-    daily_update_df = pd.read_excel(quotes_file_path, skiprows=11, usecols="B:XFD")
+    
+    # ⚠️ POTENTIAL FIX HERE: The file 44020_Daily_OV_Update is the Excel file.
+    # Check your sheet name! If not specified, pandas defaults to the first sheet (0).
+    daily_update_df = pd.read_excel(quotes_file_path, skiprows=11, usecols="B:XFD") 
 
     # Merge the DataFrames
-    merged_df = pd.merge(telamon_df, daily_update_df, left_on=telamon_df.columns[0], right_on=daily_update_df.columns[0], suffixes=('_telamon', '_daily_update'), how='outer')
+    # The current merge uses the entire first column of each DataFrame.
+    # Ensure the first column of each file is the 'Project ID' or common key.
+    merged_df = pd.merge(telamon_df, daily_update_df, 
+                         left_on=telamon_df.columns[0], 
+                         right_on=daily_update_df.columns[0], 
+                         suffixes=('_telamon', '_daily_update'), 
+                         how='outer')
 
     # Identify differences
     diff_df = pd.DataFrame()
     for column in telamon_df.columns:
         if column != telamon_df.columns[0]:
-            temp_df = merged_df[merged_df[f'{column}_telamon'] != merged_df[f'{column}_daily_update']]
+            # This comparison can fail if columns contain mixed types (e.g., int and string) or NaN.
+            # Using .fillna to treat NaNs as equal and .astype(str) for safer comparison is best practice.
+            temp_df = merged_df[
+                merged_df[f'{column}_telamon'].astype(str).fillna('') != 
+                merged_df[f'{column}_daily_update'].astype(str).fillna('')
+            ]
             diff_df = pd.concat([diff_df, temp_df])
     diff_df = diff_df.drop_duplicates()
 
-    # Create output DataFrame
-    output_df = pd.DataFrame()
-    output_df['Project ID'] = diff_df[telamon_df.columns[0]]
-    output_df['Workplan Name'] = 'Viaero_Workplan'
+    # ... rest of the function (Keep as is)
+    
+# ... (Keep download_and_process_files as is)
 
-    # Map Project ID
-    output_df['Mapped Project ID'] = output_df['Project ID'].apply(lambda x: str(x).replace('V:(F', 'PF').replace('V:(A', 'AF'))
+# download_and_process_files() # Don't run this here, just showing the code structure
 
-    # Add other columns from Telamon_report_ file
-    for column in telamon_df.columns:
-        if column != telamon_df.columns[0]:
-            output_df[column] = diff_df[f'{column}_telamon']
-
-    # Save output file
-    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d")}.csv'
-    output_path = os.path.join(network_path, output_file_name)
-    output_df.to_csv(output_path, index=False)
-
-    # Upload file to SFTP
-    sftp_host = '54.225.75.239'
-    sftp_port = 22
-    sftp_username = 'xxx'
-    sftp_password = 'xxx'
-    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
-    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
-
-download_and_process_files()
