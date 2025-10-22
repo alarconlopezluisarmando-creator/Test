@@ -1,0 +1,135 @@
+
+1. I have a file in the path /home/samsung_sea2/es/Rancomm named Viaero_weekly_exec_call_{timestamp}, I need the lastest always. 
+        host1 = 'ftp.onevizion.com'
+        port1 = 22
+        username1 = 'XXX'
+        password1 = 'XXX'
+        remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
+        file_prefix1 = 'Viaero_weekly_exec_call_'
+	
+2. After that, I need to put the output in a Excel file that I'll add in a location. This Excel file is going to be the template, in this path \\netapp\depts\Jannat\Viaero\Viaero_Weekly_call\Viaero_Weekly_call.xlsx 
+So for each sheet that we need, I'll need pasta the data in a define positions. 
+3. Sheet RF Star copy in A3
+	I need to create a table like: 
+	Where PHASE 2 is goint to be P:Viaero Phase = Phase 2
+	Cluster is going to be P:Cluster ID. 
+	Column H// Count is coming for the the column P:Viaero Project Type contain "H//" and count the values. 
+	Column E// Count is coming for the the column P:Viaero Project Type contain "E//" and count the values.
+	RFDS Submitted V:(A 1050) RF Design RFDS Submitted to Customer-Finish and count the values
+	RFDS Approved V:(A 1055) RF Design RFDS Approved by Customer-Finish and count the values
+	ACD Submitted V:(A 2870) ACD Submitted to Customer-Finish and count the values
+	TVW Received V:(A 3200) TVW Received-Finish and count the values
+	TED Recv'd V:(A 2380) BH Transport CQ Received/TED FORM-Finish and count the values
+	
+		Total Sites	H// Count	E// Count	Growth	RFDS Submitted	RFDS Approved	ACD Submitted	TVW Received	TED Recv'd
+PHASE 2	Cluster 6	18	16	1	1					
+	Cluster 7									
+	Cluster 8									
+	Cluster 9									
+	Cluster 10									
+	Cluster 11									
+	Cluster 12									
+	Cluster 13									
+	Cluster 14									
+	Cluster 15									
+	Cluster 16									
+	Cluster 17									
+	Cluster 18									
+	Cluster 19									
+	Cluster 20									
+
+
+4. Sheet - A&E Site Walks Star copy in C4
+4.1 Using V:(F 1115) Site Audit Walk Completion-Finish & V:(A 1115) Site Audit Walk Completion-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 1115) Site Audit Walk Completion-Finish to A&E - Site Walk FCT and V:(A 1115) Site Audit Walk Completion-Finish to A&E - Site Walk Actual
+4.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+A&E - Site Walk FCST	10	20	20	20	20	20	20	20	20	20	20	20	20
+A&E - Site Walk Actual	5	16	12										
+A&E - Site Walk (FCST Cumulative)	204	224	244	264	284	304	324	344	364	384	404	424	444
+A&E - Site Walk (Actual Cumulative)	206	222	234										
+
+
+5. Sheet - LE & Grd BOM Star copy in C4
+5.1 Using V:(F 1135) Ground Lease Exhibit Received-Finish & V:(A 1135) Ground Lease Exhibit Received-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 1135) Ground Lease Exhibit Received-Finish to A&E - Cable BOM and LE FCT and V:(A 1135) Ground Lease Exhibit Received-Finish to A&E - Cable BOM and LE Actual
+5.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+A&E - Cable BOM and LE	15	15	15	20	20	20	20	25	25	25	25	25	25
+A&E - Cable BOM and LE	13	14	23										
+A&E - Cable BOM and LE (FCST Cumulative)	85	100	115	135	155	175	195	220	245	270	295	320	345
+A&E - Cable BOM and LE (Actual Cumulative)	94	108	131										
+
+
+6. Sheet - PCDs Star copy in C4
+6.1 Using V:(F 1142) 90% Construction Drawing Received-Finish & V:(A 1142) 90% Construction Drawing Received-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 1142) 90% Construction Drawing Received-Finish to Customer -Finish to A&E - Preliminary CDs (FCST) and V:(A 1142) 90% Construction Drawing Received-Finish to Customer -Finish to A&E - Preliminary CDs (Actual)
+6.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+A&E - Preliminary CDs (FCST)	10	10	10	10	15	20	20	20	20	20	20	20	20
+A&E - Preliminary CDs (Actual)	6	13	9										
+A&E - Preliminary CDs (FCST Cumulative)	53	63	73	83	98	118	138	158	178	198	218	238	258
+A&E - Preliminary CDs (Actual Cumulative)	37	50	59										
+
+
+7. Final CDs Star copy in C4
+7.1 Using V:(F 1146) 100% Construction Drawing Submitted to Customer-Finish & V:(A 1146) 100% Construction Drawing Submitted to Customer-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 1146) 100% Construction Drawing Submitted to Customer-Finish toA&E - Final CDs (FCST) and V:(A 1115) Site Audit Walk Completion-Finish to A&E - A&E - Final CDs (Actual)
+7.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+A&E - Final CDs (FCST)	3	3	8	8	8	10	15	20	23	23	23	23	23
+A&E - Final CDs (Actual)	5	2	4										
+A&E - Final CDs (FCST Cumulative)	6	9	17	25	33	43	58	78	101	124	147	170	193
+A&E - Final CDs (Actual Cumulative)	8	10	14										
+
+
+8. Ground NTPs Star copy in C4
+8.1 Using V:(F 3345) Viaero Ground NTP Received-Finish & V:(A 3345) Viaero Ground NTP Received-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 3345) Viaero Ground NTP Received-Finish to Ground NTP (FCST) and V:(A 3345) Viaero Ground NTP Received-Finish to Ground NTP (Actual)
+8.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+Ground NTP (FCST)	10	10	10	15	15	20	20	20	20	20	20	20	20
+Ground NTP (Actual)	14	11	3										
+Ground NTP (FCST Cumulative)	45	55	65	80	95	115	135	155	175	195	215	235	255
+Ground NTP (Actual Cumulative)	34	45	48										
+
+
+9. Ground CxS Star copy in C4
+9.1 Using V:(F 3370) Ground Construction Start-Finish & V:(A 3370) Ground Construction Start-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 3370) Ground Construction Start-Finish to Ground CxS (FCST) and V:(A 3370) Ground Construction Start-Finish to Ground CxS (Actual)
+9.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+Ground CxS (FCST)	0	10	10	10	10	15	15	15	20	20	15	10	10
+Ground CxS (Actual)	14	11	3										
+Ground CxS (FCST Cumulative)	30	40	50	60	70	85	100	115	135	155	170	180	190
+Ground CxS (Actual Cumulative)	43	54	57										
+
+
+10. Ground CxC Star copy in C4
+10.1 Using V:(F 3460) Ground Construction Complete-Finish & V:(A 3460) Ground Construction Complete-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 3460) Ground Construction Complete-Finish to Ground CxC (FCST) and V:(A 3460) Ground Construction Complete-Finish to Ground CxC (Actual)
+10.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below. 
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+Ground CxC (FCST)	0	10	10	10	10	15	15	15	20	20	15	10	10
+Ground CxC (Actual)	14	11	3										
+Ground CxC (FCST Cumulative)	30	40	50	60	70	85	100	115	135	155	170	180	190
+Ground CxC (Actual Cumulative)	43	54	57										
+
+
+11. Ground COP Star copy in C4
+11.1 Using V:(F 3550) Ground Work Package Approved by Customer-Finish & V:(A 3550) Ground Work Package Approved by Customer-Finish do week by week (columns) using the counts for each columns, if one or more week doesnt have data, please do a 0
+	I need to rename the columns like V:(F 3550) Ground Work Package Approved by Customer-Finish to Ground COP (FCST) and V:(A 3550) Ground Work Package Approved by Customer-Finish to Ground COP (Actual)
+11.2 For both I need a an accomulative, that is going to be the previous month plus current month, se below.
+
+Task name	Wk 40	Wk 41	Wk 42	Wk 43	Wk 44	Wk 45	Wk 46	Wk 47	Wk 48	Wk 49	Wk 50	Wk 51	Wk 52
+Ground COP (FCST)	0	10	10	10	10	15	15	15	20	20	15	10	10
+Ground COP (Actual)	14	11	3										
+Ground COP (FCST Cumulative)	30	40	50	60	70	85	100	115	135	155	170	180	190
+Ground COP (Actual Cumulative)	43	54	57										
