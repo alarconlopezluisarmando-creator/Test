@@ -179,3 +179,63 @@ def main():
 
     # ... (The rest of the main function, including the writing to Excel, remains the same) ...
     # ... (weekly_reports processing remains the same, calling the updated process_data) ...
+
+
+# --- Replacement for the Aggregation and Grouping Block ---
+# (This code should replace the old df_grouped creation block in your main function)
+
+if col_phase and col_cluster and col_project_type:
+    df_phase2 = df[df[col_phase] == 'Phase 2'].copy()
+    
+    # Define the date-based columns to be counted (Request 2)
+    count_cols = {
+        'RFDS Submitted': 'V:(A 1050) RF Design RFDS Submitted to Customer-Finish',
+        'RFDS Approved': 'V:(A 1055) RF Design RFDS Approved by Customer-Finish',
+        'ACD Submitted': 'V:(A 2870) ACD Submitted to Customer-Finish',
+        'TVW Received': 'V:(A 3200) TVW Received-Finish',
+        'TED Recv\'d': 'V:(A 2380) BH Transport CQ Received/TED FORM-Finish'
+    }
+    
+    # Ensure date columns are proper datetime objects for accurate non-null counting
+    for col in count_cols.values():
+        if col in df_phase2.columns:
+            df_phase2[col] = pd.to_datetime(df_phase2[col], errors='coerce')
+
+    # Use named aggregation to ensure column names are correctly set (THE FIX)
+    aggregations = {
+        'Total Sites': (col_cluster, 'size'),
+        'H// Count': (col_project_type, lambda x: (x.str.contains('H//', na=False)).sum()),
+        'E// Count': (col_project_type, lambda x: (x.str.contains('E//', na=False)).sum()),
+        # Request 3: Count when P:Viaero Project Type is exactly 'S// NSB'
+        'Growth': (col_project_type, lambda x: (x == 'S// NSB').sum()), 
+    }
+
+    # Add the date-based count columns (Request 2)
+    for new_name, existing_name in count_cols.items():
+        if existing_name in df_phase2.columns:
+            # Count non-null values (i.e., dates) within the group for the specified column
+            aggregations[new_name] = (existing_name, lambda x: x.notna().sum())
+        else:
+            aggregations[new_name] = (existing_name, lambda x: 0)
+
+
+    # Group and aggregate using the named aggregation dictionary
+    df_grouped = df_phase2.groupby(col_cluster).agg(**aggregations).reset_index()
+    
+    # Rename the cluster column
+    df_grouped = df_grouped.rename(columns={col_cluster: 'Cluster'})
+
+    # --- Request 1: Convert Cluster to numeric and sort ---
+    df_grouped['Cluster'] = pd.to_numeric(df_grouped['Cluster'], errors='coerce')
+
+    # Select columns
+    rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
+                                'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']].copy()
+
+    # Sort by the numeric 'Cluster' column
+    rf_star_data = rf_star_data.sort_values(by='Cluster', na_position='last')
+    
+    # Convert Cluster back to string
+    rf_star_data['Cluster'] = rf_star_data['Cluster'].astype(str).replace('<NA>', '') 
+
+# ... (The rest of the main function continues) ...
