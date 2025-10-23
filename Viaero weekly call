@@ -107,3 +107,35 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         ]
         
     return pd.DataFrame(data)
+
+
+def calculate_weekly_counts(df_data, date_col):
+    """Helper to calculate weekly counts (Wk 40-52) from a date column with robust parsing."""
+    
+    # --- FIX 1: Robust Date Parsing ---
+    # Use 'mixed' inference to handle varied date formats and coerce true non-dates to NaT
+    df_dates = pd.to_datetime(df_data[date_col], errors='coerce', infer_datetime_format=True).dropna()
+    # ----------------------------------
+    
+    if df_dates.empty:
+        return {wk: 0 for wk in date_columns}
+    
+    # Use dt.normalize() to remove time component and prevent boundary errors
+    temp_dates = df_dates.dt.normalize()
+    df_weeks = temp_dates.dt.isocalendar().week.astype(int)
+    
+    # -------------------------------------------------------------------------
+    # --- Mapping and Aggregation (Logic remains the same) ---
+    # -------------------------------------------------------------------------
+    
+    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
+    
+    weekly_counts_series = df_weeks.value_counts().sort_index()
+    counts = {wk: 0 for wk in date_columns}
+    
+    # Populate the counts only for the target weeks (Wk 40-52)
+    for iso_week, count in weekly_counts_series.items():
+        if iso_week in target_weeks_map:
+            counts[target_weeks_map[iso_week]] = count
+    return counts
+
