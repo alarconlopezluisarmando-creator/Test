@@ -1,30 +1,88 @@
-The code is givin the data but I is wrong. 
-In the code we diffined the columns, please see below:
-week_columns = [f'Wk {i}' for i in range(40, 53)]
+def process_data(df, target_column_prefix, new_column_name, date_columns):
+    """
+    Filters and processes data for weekly cumulative reports (Sections 4-11).
+    Calculates weekly and cumulative counts based on the 'Actual' and 'Forecast' completion dates.
+    """
+    
+    # 1. Identify Forecast and Actual Completion Date Columns
+    # Example: If prefix is 'V:(F 1115)', col_fcst = 'V:(F 1115) ...', col_actual = 'V:(A 1115) ...'
+    col_fcst = next((col for col in df.columns if target_column_prefix.replace('A', 'F') in col), None)
+    col_actual = next((col for col in df.columns if target_column_prefix.replace('F', 'A') in col), None)
+    
+    if not col_fcst or not col_actual:
+        print(f"Warning: Columns for prefix '{target_column_prefix}' not found. Skipping section.")
+        empty_data = {'Task name': [f'{new_column_name} (FCST)', f'{new_column_name} (Actual)', f'{new_column_name} (FCST Cumulative)', f'{new_column_name} (Actual Cumulative)']}
+        empty_df = pd.DataFrame(empty_data)
+        for wk in date_columns: empty_df[wk] = 0
+        return empty_df
 
-But I think we're not doing the count propertly and matching the week, with the count week. 
-For example, for the sheet A&E Site Walks, the row A&E - Site Walk (FCST) is freeze with the number 20, for all columns, but if I do manually the count, the value that I have for the week 40 is 7, and for actual is 6 for the forescast portion, Looksl ike Actual portion is doing the logic, but using the Forescast columns (F, no the actual (A
+    # Create a mapping for target week column names (e.g., 40 -> 'Wk 40')
+    # This ensures we only count data falling into the Wk 40 to Wk 52 range.
+    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
+    
+    def calculate_weekly_counts(df_data, date_col):
+        """Helper to calculate weekly counts from a date column."""
+        # Convert the column to datetime, ignoring errors and dropping NaT (null dates)
+        df_dates = pd.to_datetime(df_data[date_col], errors='coerce').dropna()
+        
+        # Calculate the ISO Week Number from the dates
+        df_weeks = df_dates.dt.isocalendar().week.astype(int)
+        
+        # Group by the week number and count the sites completed
+        weekly_counts_series = df_weeks.value_counts().sort_index()
+        
+        # Initialize counts for all target weeks to 0
+        counts = {wk: 0 for wk in date_columns}
+        
+        # Populate the counts only for the target weeks (Wk 40-52)
+        for iso_week, count in weekly_counts_series.items():
+            if iso_week in target_weeks_map:
+                counts[target_weeks_map[iso_week]] = count
+        return counts
 
-    # ---------------------------------------------------------------------------------------------------
-    # --- 4-11. Process data for Weekly Sheets ---
-    weekly_reports = {
-        'A&E Site Walks': {'prefix': 'V:(F 1115)', 'name': 'A&E - Site Walk', 'start_cell': 'C4'},
-        'LE & Grd BOM': {'prefix': 'V:(F 1135)', 'name': 'A&E - Cable BOM and LE', 'start_cell': 'C4'},
-        'PCDs': {'prefix': 'V:(F 1142)', 'name': 'A&E - Preliminary CDs', 'start_cell': 'C4'},
-        'Final CDs': {'prefix': 'V:(F 1146)', 'name': 'A&E - Final CDs', 'start_cell': 'C4'},
-        'Ground NTPs': {'prefix': 'V:(F 3345)', 'name': 'Ground NTP', 'start_cell': 'C4'},
-        'Ground CxS': {'prefix': 'V:(F 3370)', 'name': 'Ground CxS', 'start_cell': 'C4'},
-        'Ground CxC': {'prefix': 'V:(F 3460)', 'name': 'Ground CxC', 'start_cell': 'C4'},
-        'Ground COP': {'prefix': 'V:(F 3550)', 'name': 'Ground COP', 'start_cell': 'C4'},
+    # 1. Calculate Weekly Counts
+    # FCST Counts: Use the Forecast date column (col_fcst)
+    fcst_counts = calculate_weekly_counts(df, col_fcst)
+    
+    # Actual Counts: Use the Actual date column (col_actual)
+    actual_counts = calculate_weekly_counts(df, col_actual)
+    
+    # 2. Cumulative Values
+    # **NOTE:** Keeping the initial cumulative base values as defined in your original code.
+    PREVIOUS_MONTH_BASE_FCST = 50 
+    PREVIOUS_MONTH_BASE_ACTUAL = 50
+    
+    fcst_cumulative = [PREVIOUS_MONTH_BASE_FCST]
+    actual_cumulative = [PREVIOUS_MONTH_BASE_ACTUAL]
+    
+    # Calculate cumulative values
+    for i, wk in enumerate(date_columns):
+        current_fcst = fcst_counts[wk]
+        current_actual = actual_counts[wk]
+        
+        fcst_cumulative.append(fcst_cumulative[-1] + current_fcst)
+        actual_cumulative.append(actual_cumulative[-1] + current_actual)
+            
+    fcst_cumulative.pop(0)
+    actual_cumulative.pop(0)
+    
+    # 3. Construct the final DataFrame
+    data = {
+        'Task name': [
+            f'{new_column_name} (FCST)', 
+            f'{new_column_name} (Actual)', 
+            f'{new_column_name} (FCST Cumulative)', 
+            f'{new_column_name} (Actual Cumulative)'
+        ]
     }
-
-    processed_weekly_data = {}
-    for sheet_name, config in weekly_reports.items():
-        processed_weekly_data[sheet_name] = process_data(
-            df, 
-            config['prefix'], 
-            config['name'], 
-            week_columns
-        )
-
-Could you please help me to review?
+    
+    # Add the weekly data
+    for i, wk in enumerate(date_columns):
+        data[wk] = [
+            fcst_counts[wk], 
+            actual_counts[wk], 
+            fcst_cumulative[i], 
+            actual_cumulative[i]
+        ]
+        
+    return pd.DataFrame(data)
