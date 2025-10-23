@@ -1,11 +1,10 @@
 def process_data(df, target_column_prefix, new_column_name, date_columns):
     """
     Filters and processes data for weekly cumulative reports (Sections 4-11).
-    Calculates weekly and cumulative counts based on the 'Actual' and 'Forecast' completion dates.
+    Calculates dynamic base, weekly, and final cumulative counts.
     """
     
     # 1. Identify Forecast and Actual Completion Date Columns
-    # Example: If prefix is 'V:(F 1115)', col_fcst = 'V:(F 1115) ...', col_actual = 'V:(A 1115) ...'
     col_fcst = next((col for col in df.columns if target_column_prefix.replace('A', 'F') in col), None)
     col_actual = next((col for col in df.columns if target_column_prefix.replace('F', 'A') in col), None)
     
@@ -16,22 +15,41 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         for wk in date_columns: empty_df[wk] = 0
         return empty_df
 
-    # Create a mapping for target week column names (e.g., 40 -> 'Wk 40')
-    # This ensures we only count data falling into the Wk 40 to Wk 52 range.
-    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
+    # -------------------------------------------------------------------------
+    # --- Dynamic Base and Weekly Count Helper Functions ---
+    # -------------------------------------------------------------------------
+
+    # Get the ISO week number for the start of the first week (Wk 40)
+    # Assuming Week 40 starts on a fixed date (e.g., usually the Monday closest to Sep 30/Oct 1)
+    # Since we only care if a date is BEFORE Wk 40, we only need the number 40.
+    START_WEEK_NUM = int(date_columns[0].split(' ')[1]) # Should be 40
     
-    def calculate_weekly_counts(df_data, date_col):
-        """Helper to calculate weekly counts from a date column."""
-        # Convert the column to datetime, ignoring errors and dropping NaT (null dates)
+    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
+
+    def calculate_cumulative_base(df_data, date_col):
+        """Calculates the count of completed items before the start of the first reporting week (Wk 40)."""
         df_dates = pd.to_datetime(df_data[date_col], errors='coerce').dropna()
+        if df_dates.empty:
+            return 0
         
-        # Calculate the ISO Week Number from the dates
-        df_weeks = df_dates.dt.isocalendar().week.astype(int)
+        temp_dates = df_dates.dt.normalize()
         
-        # Group by the week number and count the sites completed
+        # Filter for dates whose ISO week number is less than the start week (40)
+        # Note: This is simplified. For year-end/year-start reports, you'd need to check the year too.
+        # Assuming all relevant dates fall in the same calendar year.
+        base_count = temp_dates[temp_dates.dt.isocalendar().week < START_WEEK_NUM].count()
+        return base_count
+
+    def calculate_weekly_counts(df_data, date_col):
+        """Helper to calculate weekly counts (Wk 40-52) from a date column."""
+        df_dates = pd.to_datetime(df_data[date_col], errors='coerce').dropna()
+        if df_dates.empty:
+            return {wk: 0 for wk in date_columns}
+        
+        temp_dates = df_dates.dt.normalize()
+        df_weeks = temp_dates.dt.isocalendar().week.astype(int)
+        
         weekly_counts_series = df_weeks.value_counts().sort_index()
-        
-        # Initialize counts for all target weeks to 0
         counts = {wk: 0 for wk in date_columns}
         
         # Populate the counts only for the target weeks (Wk 40-52)
@@ -40,22 +58,24 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
                 counts[target_weeks_map[iso_week]] = count
         return counts
 
-    # 1. Calculate Weekly Counts
-    # FCST Counts: Use the Forecast date column (col_fcst)
-    fcst_counts = calculate_weekly_counts(df, col_fcst)
+    # -------------------------------------------------------------------------
+    # --- Execute Calculations ---
+    # -------------------------------------------------------------------------
+
+    # 1. Calculate Dynamic Base Values
+    PREVIOUS_MONTH_BASE_FCST = calculate_cumulative_base(df, col_fcst)
+    PREVIOUS_MONTH_BASE_ACTUAL = calculate_cumulative_base(df, col_actual)
+    print(f"[{new_column_name}] Calculated Base: FCST={PREVIOUS_MONTH_BASE_FCST}, Actual={PREVIOUS_MONTH_BASE_ACTUAL}")
     
-    # Actual Counts: Use the Actual date column (col_actual)
+    # 2. Calculate Weekly Counts
+    fcst_counts = calculate_weekly_counts(df, col_fcst)
     actual_counts = calculate_weekly_counts(df, col_actual)
     
-    # 2. Cumulative Values
-    # **NOTE:** Keeping the initial cumulative base values as defined in your original code.
-    PREVIOUS_MONTH_BASE_FCST = 50 
-    PREVIOUS_MONTH_BASE_ACTUAL = 50
-    
+    # 3. Calculate Cumulative Values
     fcst_cumulative = [PREVIOUS_MONTH_BASE_FCST]
     actual_cumulative = [PREVIOUS_MONTH_BASE_ACTUAL]
     
-    # Calculate cumulative values
+    # Calculate cumulative values by adding weekly counts to the running total
     for i, wk in enumerate(date_columns):
         current_fcst = fcst_counts[wk]
         current_actual = actual_counts[wk]
@@ -63,10 +83,11 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         fcst_cumulative.append(fcst_cumulative[-1] + current_fcst)
         actual_cumulative.append(actual_cumulative[-1] + current_actual)
             
+    # Remove the initial base value used for calculation setup
     fcst_cumulative.pop(0)
     actual_cumulative.pop(0)
     
-    # 3. Construct the final DataFrame
+    # 4. Construct the final DataFrame
     data = {
         'Task name': [
             f'{new_column_name} (FCST)', 
