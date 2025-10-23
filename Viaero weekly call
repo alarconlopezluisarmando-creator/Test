@@ -1,22 +1,11 @@
-import paramiko
-import pandas as pd
-import re
-import tempfile
-import os
-from datetime import datetime
+Hi,
 
-# --- Configuration Section ---
+I have below code, the code is working propertly, but I need some updtes:
+1. In the sheet RF, we have column named "Cluster"; we need to change this string to number and sorter. 
+2. The count for the columns RFDS Submitted,RFDS Approved,ACD Submitted,TVW Received,TED Recv'd need to be when the column has a date by cluster. Now is counting for all, so we have the same number for all rows. 
+3. Please check the counts for the colum Growth, this column need to be count when P:Viaero Project Type = S// NSB, like you did for H// and E//. 
+4. For the other sheets, the count need to be week by week. 
 
-# 1. SFTP Details
-SFTP_HOST = 'ftp.onevizion.com'
-SFTP_PORT = 22
-SFTP_USERNAME = 'XXX'  # REMOVE 'XXX' AND INSERT YOUR ACTUAL USERNAME
-SFTP_PASSWORD = 'XXX'  # REMOVE 'XXX' AND INSERT YOUR ACTUAL PASSWORD
-SFTP_REMOTE_PATH = '/home/samsung_sea2/es/Rancomm/'
-SFTP_FILE_PREFIX = 'Viaero_weekly_exec_call_'
-
-# 2. Excel Template Path (Need to ensure your machine has access to this network path)
-EXCEL_TEMPLATE_PATH = r'\\netapp\depts\Jannat\Viaero\Viaero_Weekly_call\Viaero_Weekly_call.xlsx'
 
 # --- Helper Functions ---
 
@@ -240,25 +229,26 @@ def main():
              df_grouped[name] = count
 
         # Add 'PHASE 2' column and reorder
-        df_grouped.insert(0, 'PHASE 2', 'PHASE 2')
-        rf_star_data = df_grouped[['PHASE 2', 'Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']]
-    else:
-        print("Warning: Missing required columns for 'RF Star' sheet. Using empty data frame.")
-        rf_star_data = pd.DataFrame(columns=['PHASE 2', 'Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                            'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d'])
-
+        # rf_star_data.insert(0, 'PHASE 2', 'PHASE 2')  # Comment out or remove this line
+        if col_phase and col_cluster and col_project_type:
+            # ... (your existing code)
+            rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
+                                        'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']]
+            rf_star_data = rf_star_data.sort_values(by='Cluster')
+        else:
+            rf_star_data = pd.DataFrame(columns=['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
+                                                'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d'])
     # ---------------------------------------------------------------------------------------------------
     # --- 4-11. Process data for Weekly Sheets ---
     weekly_reports = {
-        'A&E Site Walks Star': {'prefix': 'V:(F 1115)', 'name': 'A&E - Site Walk', 'start_cell': 'C4'},
-        'LE & Grd BOM Star': {'prefix': 'V:(F 1135)', 'name': 'A&E - Cable BOM and LE', 'start_cell': 'C4'},
-        'PCDs Star': {'prefix': 'V:(F 1142)', 'name': 'A&E - Preliminary CDs', 'start_cell': 'C4'},
-        'Final CDs Star': {'prefix': 'V:(F 1146)', 'name': 'A&E - Final CDs', 'start_cell': 'C4'},
-        'Ground NTPs Star': {'prefix': 'V:(F 3345)', 'name': 'Ground NTP', 'start_cell': 'C4'},
-        'Ground CxS Star': {'prefix': 'V:(F 3370)', 'name': 'Ground CxS', 'start_cell': 'C4'},
-        'Ground CxC Star': {'prefix': 'V:(F 3460)', 'name': 'Ground CxC', 'start_cell': 'C4'},
-        'Ground COP Star': {'prefix': 'V:(F 3550)', 'name': 'Ground COP', 'start_cell': 'C4'},
+        'A&E Site Walks': {'prefix': 'V:(F 1115)', 'name': 'A&E - Site Walk', 'start_cell': 'C4'},
+        'LE & Grd BOM': {'prefix': 'V:(F 1135)', 'name': 'A&E - Cable BOM and LE', 'start_cell': 'C4'},
+        'PCDs': {'prefix': 'V:(F 1142)', 'name': 'A&E - Preliminary CDs', 'start_cell': 'C4'},
+        'Final CDs': {'prefix': 'V:(F 1146)', 'name': 'A&E - Final CDs', 'start_cell': 'C4'},
+        'Ground NTPs': {'prefix': 'V:(F 3345)', 'name': 'Ground NTP', 'start_cell': 'C4'},
+        'Ground CxS': {'prefix': 'V:(F 3370)', 'name': 'Ground CxS', 'start_cell': 'C4'},
+        'Ground CxC': {'prefix': 'V:(F 3460)', 'name': 'Ground CxC', 'start_cell': 'C4'},
+        'Ground COP': {'prefix': 'V:(F 3550)', 'name': 'Ground COP', 'start_cell': 'C4'},
     }
 
     processed_weekly_data = {}
@@ -279,19 +269,19 @@ def main():
         # Use pandas ExcelWriter to append data to existing file
         with pd.ExcelWriter(EXCEL_TEMPLATE_PATH, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
             
-            # --- Write RF Star Data (Section 3) ---
+            # --- Write RF Data (Section 3) ---
             start_row_rf = 2 # A3 (0-indexed row is 2)
             start_col_rf = 0 # A (0-indexed col is 0)
             
             rf_star_data.to_excel(
                 writer, 
-                sheet_name='RF Star', 
-                startrow=start_row_rf, 
-                startcol=start_col_rf, 
+                sheet_name='RF', 
+                startrow=1,  # Row 2 (0-indexed is 1)
+                startcol=1,  # Column B (0-indexed is 1)
                 header=True, 
                 index=False
             )
-            print("Successfully updated 'RF Star' sheet.")
+            print("Successfully updated 'RF' sheet.")
             
             # --- Write Weekly Data (Sections 4-11) ---
             for sheet_name, data_df in processed_weekly_data.items():
@@ -300,9 +290,6 @@ def main():
                 row_num = int(start_cell[1:])
                 
                 start_row_weekly = row_num - 1
-                # C is the starting column (C4 -> C is column 2). We want the Task Name column to be the first one written.
-                # Since the requested starting cell is C4, and 'Task name' is the first column in the DF, 
-                # we want the Task Name column to align with C.
                 start_col_weekly = ord(col_letter) - ord('A')
                 
                 data_df.to_excel(
@@ -314,13 +301,10 @@ def main():
                     index=False
                 )
                 print(f"Successfully updated '{sheet_name}' sheet.")
-
+    
         print("\n✅ All data processed and Excel file updated successfully!")
         print(f"File updated: {EXCEL_TEMPLATE_PATH}")
-
-    except FileNotFoundError:
-        print(f"\n❌ Error: Excel template file not found at {EXCEL_TEMPLATE_PATH}.")
-        print("Please ensure the network path is accessible and correct.")
+    
     except Exception as e:
         print(f"\n❌ An unexpected error occurred during Excel write: {e}")
 
