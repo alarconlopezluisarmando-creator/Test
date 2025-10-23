@@ -216,3 +216,84 @@ download_and_process_files()
 	P-070776		580	0580	CO-ARLINGTON	Active
 	P-070777		843	0843	CO-BAR_RANCH	Complete
 
+def process_files(quotes_file_path, tracker_file_path, network_path):
+    # Read the files
+    telamon_df = pd.read_excel(tracker_file_path) 
+    
+    # 🎯 FIX 1: Change header=11 to header=10. 
+    # This targets the 11th row (0-indexed) where 'Project ID' is located.
+    # 🎯 FIX 2: Change usecols="B:XFD" to usecols="A:XFD" 
+    # to ensure all columns, including 'Project ID', are captured.
+    daily_update_df = pd.read_excel(quotes_file_path, header=10, usecols="A:XFD")
+
+    if daily_update_df.empty:
+        # A more helpful warning for further debugging
+        print("⚠️ WARNING: The '44020_Daily_OV_Update' file is still coming empty. Please verify the actual row number of 'Project ID' in the Excel file.")
+
+    # Merge the DataFrames
+    merged_df = pd.merge(telamon_df, daily_update_df, 
+                         left_on='P:Viaero Root ID', 
+                         # NOTE: The column name in the daily update file is 'Other 1 - Site Number'
+                         right_on='Other 1 - Site Number', 
+                         suffixes=('_telamon', '_daily_update'), 
+                         how='outer')
+
+    # Identify differences
+    diff_df = pd.DataFrame()
+    for column in telamon_df.columns:
+        if column != 'P:Viaero Root ID':
+            # NOTE: For columns that exist in both, we need to handle the potential lack of a suffix 
+            # if the column name is the same but Pandas didn't rename it due to the suffix parameter.
+            # We are assuming the columns we need to compare have distinct names or were correctly merged.
+            
+            # Use the merged column names for comparison
+            telamon_col = f'{column}_telamon'
+            daily_col = f'{column}_daily_update'
+            
+            # Check if both comparison columns exist before comparing
+            if telamon_col in merged_df.columns and daily_col in merged_df.columns:
+                temp_df = merged_df[
+                    merged_df[telamon_col].astype(str).fillna('') != 
+                    merged_df[daily_col].astype(str).fillna('')
+                ]
+                diff_df = pd.concat([diff_df, temp_df])
+    diff_df = diff_df.drop_duplicates()
+
+    # Create output DataFrame
+    output_df = pd.DataFrame()
+    output_df['Project ID'] = diff_df['Project ID']
+    output_df['Workplan Name'] = 'Viaero_Workplan'
+
+    # Map Project ID
+    output_df['Mapped Project ID'] = output_df['Project ID'].apply(lambda x: str(x).replace('V:(F', 'PF').replace('V:(A', 'AF'))
+
+    # Add other columns from Telamon_report_ file
+    for column in telamon_df.columns:
+        # If the column from the Telamon file was renamed, use the suffixed name
+        telamon_col = column if column == 'Project ID' else f'{column}_telamon'
+        
+        if telamon_col in diff_df.columns:
+            output_df[column] = diff_df[telamon_col]
+        elif column in diff_df.columns:
+            # Fallback for columns not involved in the merge key
+            output_df[column] = diff_df[column]
+
+
+    # Save output file
+    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d")}.csv'
+    output_path = os.path.join(network_path, output_file_name)
+    output_df.to_csv(output_path, index=False)
+
+    # Upload file to SFTP
+    sftp_host = '54.225.75.239'
+    sftp_port = 22
+    sftp_username = 'xxx'
+    sftp_password = 'xxx'
+    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
+    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+
+# Ensure the rest of the functions (download_file_from_sftp_to_network, get_sftp_connection, etc.) 
+# remain as updated in the previous response, as they contain the fixes for the file 
+# extension (.xlsx) and the Telamon report's timestamp format (YYYYMMDDHHMM).
+
+# download_and_process_files() # Call this to run the entire script
