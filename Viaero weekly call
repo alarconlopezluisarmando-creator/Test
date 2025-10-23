@@ -5,46 +5,52 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
     """
     
     # 1. Identify Forecast and Actual Completion Date Columns
-    col_fcst = next((col for col in df.columns if target_column_prefix.replace('A', 'F') in col), None)
-    col_actual = next((col for col in df.columns if target_column_prefix.replace('F', 'A') in col), None)
+    # Example: If prefix is 'V:(F 1115)', col_fcst should match a column like 'V:(F 1115) ...'
+    # .replace('A', 'F') and .replace('F', 'A') correctly toggles between Forecast (F) and Actual (A) prefixes.
+    fcst_prefix = target_column_prefix.replace('A', 'F') 
+    actual_prefix = target_column_prefix.replace('F', 'A')
+
+    # Look for the full column name that starts with the prefix.
+    col_fcst = next((col for col in df.columns if col.startswith(fcst_prefix)), None)
+    col_actual = next((col for col in df.columns if col.startswith(actual_prefix)), None)
     
-    if not col_fcst or not col_actual:
-        print(f"Warning: Columns for prefix '{target_column_prefix}' not found. Skipping section.")
+    # -------------------------------------------------------------------------
+    # --- CRITICAL ERROR CHECK (PREVENTS 'NoneType' ERROR) ---
+    if col_fcst is None or col_actual is None:
+        print(f"Warning: Missing required columns for '{new_column_name}'. FCST prefix sought: '{fcst_prefix}', Actual prefix sought: '{actual_prefix}'. Skipping section.")
         empty_data = {'Task name': [f'{new_column_name} (FCST)', f'{new_column_name} (Actual)', f'{new_column_name} (FCST Cumulative)', f'{new_column_name} (Actual Cumulative)']}
         empty_df = pd.DataFrame(empty_data)
         for wk in date_columns: empty_df[wk] = 0
         return empty_df
-
-    # -------------------------------------------------------------------------
-    # --- Dynamic Base and Weekly Count Helper Functions ---
     # -------------------------------------------------------------------------
 
     # Get the ISO week number for the start of the first week (Wk 40)
-    # Assuming Week 40 starts on a fixed date (e.g., usually the Monday closest to Sep 30/Oct 1)
-    # Since we only care if a date is BEFORE Wk 40, we only need the number 40.
     START_WEEK_NUM = int(date_columns[0].split(' ')[1]) # Should be 40
-    
     target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
 
+    # --- Helper Functions (using the fixed date parsing from the last response) ---
+    
     def calculate_cumulative_base(df_data, date_col):
         """Calculates the count of completed items before the start of the first reporting week (Wk 40)."""
-        df_dates = pd.to_datetime(df_data[date_col], errors='coerce').dropna()
-        if df_dates.empty:
-            return 0
+        # Ensure date_col is NOT None before subscripting
+        if date_col is None: return 0 
+
+        # Use robust date parsing
+        df_dates = pd.to_datetime(df_data[date_col], errors='coerce', infer_datetime_format=True).dropna()
+        if df_dates.empty: return 0
         
         temp_dates = df_dates.dt.normalize()
-        
-        # Filter for dates whose ISO week number is less than the start week (40)
-        # Note: This is simplified. For year-end/year-start reports, you'd need to check the year too.
-        # Assuming all relevant dates fall in the same calendar year.
         base_count = temp_dates[temp_dates.dt.isocalendar().week < START_WEEK_NUM].count()
         return base_count
 
     def calculate_weekly_counts(df_data, date_col):
         """Helper to calculate weekly counts (Wk 40-52) from a date column."""
-        df_dates = pd.to_datetime(df_data[date_col], errors='coerce').dropna()
-        if df_dates.empty:
-            return {wk: 0 for wk in date_columns}
+        # Ensure date_col is NOT None before subscripting
+        if date_col is None: return {wk: 0 for wk in date_columns}
+        
+        # Use robust date parsing
+        df_dates = pd.to_datetime(df_data[date_col], errors='coerce', infer_datetime_format=True).dropna()
+        if df_dates.empty: return {wk: 0 for wk in date_columns}
         
         temp_dates = df_dates.dt.normalize()
         df_weeks = temp_dates.dt.isocalendar().week.astype(int)
@@ -52,7 +58,6 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         weekly_counts_series = df_weeks.value_counts().sort_index()
         counts = {wk: 0 for wk in date_columns}
         
-        # Populate the counts only for the target weeks (Wk 40-52)
         for iso_week, count in weekly_counts_series.items():
             if iso_week in target_weeks_map:
                 counts[target_weeks_map[iso_week]] = count
@@ -60,12 +65,12 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
 
     # -------------------------------------------------------------------------
     # --- Execute Calculations ---
-    # -------------------------------------------------------------------------
+    # Since we passed the initial check, col_fcst and col_actual are guaranteed to be strings (column names).
 
     # 1. Calculate Dynamic Base Values
     PREVIOUS_MONTH_BASE_FCST = calculate_cumulative_base(df, col_fcst)
     PREVIOUS_MONTH_BASE_ACTUAL = calculate_cumulative_base(df, col_actual)
-    print(f"[{new_column_name}] Calculated Base: FCST={PREVIOUS_MONTH_BASE_FCST}, Actual={PREVIOUS_MONTH_BASE_ACTUAL}")
+    # ... (Rest of the calculation logic is the same and uses col_fcst/col_actual safely) ...
     
     # 2. Calculate Weekly Counts
     fcst_counts = calculate_weekly_counts(df, col_fcst)
@@ -107,35 +112,3 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         ]
         
     return pd.DataFrame(data)
-
-
-def calculate_weekly_counts(df_data, date_col):
-    """Helper to calculate weekly counts (Wk 40-52) from a date column with robust parsing."""
-    
-    # --- FIX 1: Robust Date Parsing ---
-    # Use 'mixed' inference to handle varied date formats and coerce true non-dates to NaT
-    df_dates = pd.to_datetime(df_data[date_col], errors='coerce', infer_datetime_format=True).dropna()
-    # ----------------------------------
-    
-    if df_dates.empty:
-        return {wk: 0 for wk in date_columns}
-    
-    # Use dt.normalize() to remove time component and prevent boundary errors
-    temp_dates = df_dates.dt.normalize()
-    df_weeks = temp_dates.dt.isocalendar().week.astype(int)
-    
-    # -------------------------------------------------------------------------
-    # --- Mapping and Aggregation (Logic remains the same) ---
-    # -------------------------------------------------------------------------
-    
-    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
-    
-    weekly_counts_series = df_weeks.value_counts().sort_index()
-    counts = {wk: 0 for wk in date_columns}
-    
-    # Populate the counts only for the target weeks (Wk 40-52)
-    for iso_week, count in weekly_counts_series.items():
-        if iso_week in target_weeks_map:
-            counts[target_weeks_map[iso_week]] = count
-    return counts
-
