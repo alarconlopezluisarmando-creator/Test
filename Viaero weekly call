@@ -1,82 +1,11 @@
-Hi,
-
-I have below code, the code is working propertly, but I need some updtes:
-1. In the sheet RF, we have column named "Cluster"; we need to change this string to number and sorter. 
-2. The count for the columns RFDS Submitted,RFDS Approved,ACD Submitted,TVW Received,TED Recv'd need to be when the column has a date by cluster. Now is counting for all, so we have the same number for all rows. 
-3. Please check the counts for the colum Growth, this column need to be count when P:Viaero Project Type = S// NSB, like you did for H// and E//. 
-4. For the other sheets, the count need to be week by week. 
-
-
-# --- Helper Functions ---
-
-def fetch_latest_file_from_sftp(host, port, username, password, remote_path, file_prefix):
-    """Connects via SFTP, finds the latest file matching the prefix, downloads it to a temp file, and returns the temp file path."""
-    print(f"Connecting to SFTP host: {host}...")
-    
-    transport = paramiko.Transport((host, port))
-    transport.connect(username=username, password=password)
-    sftp = paramiko.SFTPClient.from_transport(transport)
-    
-    print("SFTP connection established.")
-    
-    try:
-        # List files and find the latest one
-        files = sftp.listdir(remote_path)
-        
-        target_files = []
-        for f in files:
-            if f.startswith(file_prefix) and f.endswith('.xlsx'): # Added .xlsx check
-                # Attempt to extract timestamp from filename
-                match = re.search(r'(\d{8,})', f) 
-                if match:
-                    timestamp_str = match.group(1)
-                    try:
-                        # Assuming a date-like timestamp (YYYYMMDD) for comparison
-                        if len(timestamp_str) >= 8:
-                             timestamp = datetime.strptime(timestamp_str[:8], '%Y%m%d') 
-                        else:
-                            timestamp = datetime.min
-                    except ValueError:
-                        timestamp = datetime.min
-                        
-                    target_files.append((f, timestamp))
-                    
-        if not target_files:
-            raise FileNotFoundError(f"No .xlsx files found with prefix '{file_prefix}' in '{remote_path}'.")
-
-        # Get the file with the maximum timestamp
-        latest_file_name, _ = max(target_files, key=lambda item: item[1])
-        remote_full_path = remote_path + latest_file_name
-        
-        print(f"Latest file found: {latest_file_name}. Downloading content...")
-
-        # Create a temporary file to save the downloaded XLSX data
-        temp_file = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
-        temp_file_path = temp_file.name
-        temp_file.close()
-
-        sftp.get(remote_full_path, temp_file_path)
-        
-        print(f"File downloaded successfully to temporary path: {temp_file_path}")
-        
-        return temp_file_path
-
-    finally:
-        sftp.close()
-        transport.close()
-        print("SFTP connection closed.")
-
 def process_data(df, target_column_prefix, new_column_name, date_columns):
     """
     Filters and processes data for weekly cumulative reports (Sections 4-11).
-    
-    NOTE: This function contains **PLACEHOLDER LOGIC** for weekly counts 
-    and initial cumulative values. You MUST replace this with your actual
-    date-based aggregation logic (e.g., based on a completion date column).
+    Calculates weekly and cumulative counts based on the 'Actual' completion date.
     """
     
-    # 1. Weekly Counts (FCST and Actual)
-    # Attempt to find the full column names based on the prefix.
+    # 1. Identify Forecast and Actual Completion Date Columns
+    # The 'Actual' column is needed for counting. Assuming the completion date is in the 'A' (Actual) column.
     col_fcst = next((col for col in df.columns if target_column_prefix.replace('A', 'F') in col), None)
     col_actual = next((col for col in df.columns if target_column_prefix.replace('F', 'A') in col), None)
     
@@ -87,20 +16,37 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         for wk in date_columns: empty_df[wk] = 0
         return empty_df
 
-    # --- SIMULATION OF WEEKLY AGGREGATION (***REPLACE THIS BLOCK***) ---
-    # **PLACEHOLDER:** Sum non-null values and distribute them across weeks.
-    actual_total = df[col_actual].notna().sum()
+    # --- Weekly Aggregation Logic (REQUIRED CHANGE) ---
+
+    # Convert the Actual completion column to datetime, ignoring errors
+    df_actual_dates = pd.to_datetime(df[col_actual], errors='coerce').dropna()
     
-    fcst_counts = {wk: 20 for wk in date_columns} # Placeholder for FCST
+    # Calculate the ISO Week Number (week 1 to 53) from the completion dates
+    # Assuming 'Wk 40' to 'Wk 52' is based on the ISO week number.
+    df_actual_weeks = df_actual_dates.dt.isocalendar().week.astype(int)
+    
+    # Create a mapping for target week column names (e.g., 40 -> 'Wk 40')
+    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
+    
+    # 1. Weekly Actual Counts: Group by the week number and count the sites completed
+    actual_counts_series = df_actual_weeks.value_counts().sort_index()
+    
+    # Initialize counts for all target weeks to 0
     actual_counts = {wk: 0 for wk in date_columns}
     
-    # Placeholder: Distribute actual total roughly across the first 3 weeks.
-    actual_counts[date_columns[0]] = int(actual_total * 0.4)
-    actual_counts[date_columns[1]] = int(actual_total * 0.3)
-    actual_counts[date_columns[2]] = actual_total - actual_counts[date_columns[0]] - actual_counts[date_columns[1]]
-    # --------------------------------------------------------------------
-        
-    # **PLACEHOLDER:** Initial cumulative values up to the start of Week 40
+    # Populate the counts for the target weeks
+    for iso_week, count in actual_counts_series.items():
+        if iso_week in target_weeks_map:
+            actual_counts[target_weeks_map[iso_week]] = count
+
+    # 2. Weekly Forecast Counts (Placeholder, but now structured)
+    # **NOTE:** Your original code used a static '20' for FCST. 
+    # To avoid changing your existing logic for FCST, I'll keep it as a placeholder.
+    # ***You should update this logic to read actual forecast values.***
+    fcst_counts = {wk: 20 for wk in date_columns} 
+    
+    # 3. Cumulative Values
+    # **PLACEHOLDER:** Initial cumulative values (same as original code)
     PREVIOUS_MONTH_BASE_FCST = 50 
     PREVIOUS_MONTH_BASE_ACTUAL = 50
     
@@ -118,7 +64,7 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
     fcst_cumulative.pop(0)
     actual_cumulative.pop(0)
     
-    # PHRASE 3: Construct the final DataFrame
+    # 4. Construct the final DataFrame
     data = {
         'Task name': [
             f'{new_column_name} (FCST)', 
@@ -139,33 +85,11 @@ def process_data(df, target_column_prefix, new_column_name, date_columns):
         
     return pd.DataFrame(data)
 
-# ---------------------------------------------------------------------------------------------------
+
 
 def main():
-    """Main function to orchestrate the SFTP download, data processing, and Excel update."""
-    temp_file_path = None
-    try:
-        # 1. Download the latest file
-        temp_file_path = fetch_latest_file_from_sftp(
-            SFTP_HOST, SFTP_PORT, SFTP_USERNAME, SFTP_PASSWORD, 
-            SFTP_REMOTE_PATH, SFTP_FILE_PREFIX
-        )
-        
-        # Read the Excel file into a pandas DataFrame (assuming the data is in the first sheet)
-        df = pd.read_excel(temp_file_path)
-        print(f"Data loaded into DataFrame with {len(df)} rows.")
-
-    except Exception as e:
-        print(f"An error occurred during SFTP/File loading: {e}")
-        return # Exit if file can't be loaded
-    finally:
-        # Clean up the temporary file
-        if temp_file_path and os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-            print(f"Cleaned up temporary file: {temp_file_path}")
-    
-    # --- Define date columns (Wk 40 to Wk 52) ---
-    week_columns = [f'Wk {i}' for i in range(40, 53)]
+    # ... (SFTP download and file loading code remains the same) ...
+    # ... (week_columns definition remains the same) ...
 
     # ---------------------------------------------------------------------------------------------------
     # --- 3. Process data for 'RF Star' sheet ---
@@ -177,17 +101,7 @@ def main():
     if col_phase and col_cluster and col_project_type:
         df_phase2 = df[df[col_phase] == 'Phase 2'].copy()
         
-        # Aggregation Dictionary
-        agg_dict = {
-            col_cluster: 'size', # Used for Total Sites (size of group)
-            col_project_type: [
-                ('H// Count', lambda x: (x == 'H//').sum()), 
-                ('E// Count', lambda x: (x == 'E//').sum()),
-            ]
-        }
-        
-        # Adding the specific V:(...) count columns
-        # Note: I am assuming the column names are exactly as provided in the prompt.
+        # Define the date-based columns to be counted (Request 2)
         count_cols = {
             'RFDS Submitted': 'V:(A 1050) RF Design RFDS Submitted to Customer-Finish',
             'RFDS Approved': 'V:(A 1055) RF Design RFDS Approved by Customer-Finish',
@@ -196,117 +110,72 @@ def main():
             'TED Recv\'d': 'V:(A 2380) BH Transport CQ Received/TED FORM-Finish'
         }
         
-        # Check if the required count columns exist before adding to agg_dict
+        # Ensure date columns are proper datetime objects for accurate non-null counting
+        for col in count_cols.values():
+            if col in df_phase2.columns:
+                # Coerce to datetime; non-dates become NaT (NaT is non-existent/null)
+                df_phase2[col] = pd.to_datetime(df_phase2[col], errors='coerce')
+        
+        # Aggregation Dictionary for GroupBy
+        # The key for the aggregation is the column in df_phase2, the value is a tuple ('New Column Name', aggregation_function)
+        agg_dict = {
+            # Total Sites
+            col_cluster: ('Total Sites', 'size'),
+            
+            # H// and E// Counts (Assuming 'H//' and 'E//' must be part of the string)
+            col_project_type: [
+                ('H// Count', lambda x: (x.str.contains('H//', na=False)).sum()), 
+                ('E// Count', lambda x: (x.str.contains('E//', na=False)).sum()),
+                # Growth Count (Request 3: Count when P:Viaero Project Type is exactly 'S// NSB')
+                ('Growth', lambda x: (x == 'S// NSB').sum()), 
+            ]
+        }
+        
+        # Add the date-based count columns to the aggregation (Request 2)
         for new_name, existing_name in count_cols.items():
             if existing_name in df_phase2.columns:
-                # Count non-null values within the group for the specified column
-                agg_dict[existing_name] = ('Count_' + new_name, lambda x: df_phase2.loc[x.index, existing_name].notna().sum())
+                # Count non-null values (i.e., dates) within the group for the specified column
+                agg_dict[existing_name] = (new_name, lambda x: df_phase2.loc[x.index, existing_name].notna().sum())
             else:
                  # Add a placeholder if the column is missing
-                agg_dict[existing_name] = ('Count_' + new_name, lambda x: 0)
+                agg_dict[existing_name] = (new_name, lambda x: 0)
 
         # Group and aggregate
-        df_grouped = df_phase2.groupby(col_cluster).agg(
-            **{
-                'Total Sites': (col_cluster, 'size'), # Count of rows in the group
-                'H// Count': (col_project_type, lambda x: (x.str.contains('H//', na=False)).sum()), # Check for 'H//' in Project Type
-                'E// Count': (col_project_type, lambda x: (x.str.contains('E//', na=False)).sum()), # Check for 'E//' in Project Type
-                'Growth': (col_project_type, lambda x: ((x.str.contains('H//', na=False)) | (x.str.contains('E//', na=False))).any().astype(int)),
-            }
-        ).reset_index().rename(columns={col_cluster: 'Cluster'})
-
-        # Merge the specific V:(...) counts (Requires a separate step due to complexity of lambda/groupby indexing)
-        # For simplicity and to match the prompt's implied logic (count ALL sites in PHASE 2 meeting the criteria),
-        # I will calculate these counts once for the entire Phase 2 dataset and merge them as a Total value (which is likely what is intended
-        # as a direct count within a cluster lambda is complex if the original data is a single row per site).
+        # Use .agg() with the dictionary to rename and perform calculations simultaneously
+        df_grouped = df_phase2.groupby(col_cluster).agg(agg_dict).reset_index()
         
-        # Single Counts for the entire PHASE 2
-        total_counts = {name: df_phase2[col].notna().sum() for name, col in count_cols.items() if col in df_phase2.columns}
+        # Clean up column names from the multi-index created by agg (if applicable)
+        # Flatten the column index if it resulted in a multi-index (common when using a list for aggregation)
+        if isinstance(df_grouped.columns, pd.MultiIndex):
+            new_columns = []
+            for col in df_grouped.columns:
+                if col[1] == '':
+                    new_columns.append(col[0]) # Cluster column
+                else:
+                    new_columns.append(col[1]) # Aggregated columns
+            df_grouped.columns = new_columns
         
-        # Add the total counts (simplifying assumption: these counts are the same for all clusters)
-        # NOTE: A more robust solution would require knowing the exact relationship between sites and these completion statuses.
-        for name, count in total_counts.items():
-             df_grouped[name] = count
+        # Rename the cluster column
+        df_grouped = df_grouped.rename(columns={col_cluster: 'Cluster'})
 
-        # Add 'PHASE 2' column and reorder
-        # rf_star_data.insert(0, 'PHASE 2', 'PHASE 2')  # Comment out or remove this line
-        if col_phase and col_cluster and col_project_type:
-            # ... (your existing code)
-            rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                        'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']]
-            rf_star_data = rf_star_data.sort_values(by='Cluster')
-        else:
-            rf_star_data = pd.DataFrame(columns=['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                                'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d'])
-    # ---------------------------------------------------------------------------------------------------
-    # --- 4-11. Process data for Weekly Sheets ---
-    weekly_reports = {
-        'A&E Site Walks': {'prefix': 'V:(F 1115)', 'name': 'A&E - Site Walk', 'start_cell': 'C4'},
-        'LE & Grd BOM': {'prefix': 'V:(F 1135)', 'name': 'A&E - Cable BOM and LE', 'start_cell': 'C4'},
-        'PCDs': {'prefix': 'V:(F 1142)', 'name': 'A&E - Preliminary CDs', 'start_cell': 'C4'},
-        'Final CDs': {'prefix': 'V:(F 1146)', 'name': 'A&E - Final CDs', 'start_cell': 'C4'},
-        'Ground NTPs': {'prefix': 'V:(F 3345)', 'name': 'Ground NTP', 'start_cell': 'C4'},
-        'Ground CxS': {'prefix': 'V:(F 3370)', 'name': 'Ground CxS', 'start_cell': 'C4'},
-        'Ground CxC': {'prefix': 'V:(F 3460)', 'name': 'Ground CxC', 'start_cell': 'C4'},
-        'Ground COP': {'prefix': 'V:(F 3550)', 'name': 'Ground COP', 'start_cell': 'C4'},
-    }
+        # --- Request 1: Convert Cluster to numeric and sort ---
+        # Convert Cluster column to numeric, forcing errors to NaT (which will be sorted at the end/start)
+        df_grouped['Cluster'] = pd.to_numeric(df_grouped['Cluster'], errors='coerce')
 
-    processed_weekly_data = {}
-    for sheet_name, config in weekly_reports.items():
-        processed_weekly_data[sheet_name] = process_data(
-            df, 
-            config['prefix'], 
-            config['name'], 
-            week_columns
-        )
+        # Select columns and sort
+        rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
+                                    'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']].copy()
 
-    # ---------------------------------------------------------------------------------------------------
-    # --- 2. Write data to Excel Template ---
-
-    try:
-        print(f"Attempting to write data to Excel template: {EXCEL_TEMPLATE_PATH}")
+        # Sort by the numeric 'Cluster' column
+        rf_star_data = rf_star_data.sort_values(by='Cluster', na_position='last')
         
-        # Use pandas ExcelWriter to append data to existing file
-        with pd.ExcelWriter(EXCEL_TEMPLATE_PATH, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-            
-            # --- Write RF Data (Section 3) ---
-            start_row_rf = 2 # A3 (0-indexed row is 2)
-            start_col_rf = 0 # A (0-indexed col is 0)
-            
-            rf_star_data.to_excel(
-                writer, 
-                sheet_name='RF', 
-                startrow=1,  # Row 2 (0-indexed is 1)
-                startcol=1,  # Column B (0-indexed is 1)
-                header=True, 
-                index=False
-            )
-            print("Successfully updated 'RF' sheet.")
-            
-            # --- Write Weekly Data (Sections 4-11) ---
-            for sheet_name, data_df in processed_weekly_data.items():
-                start_cell = weekly_reports[sheet_name]['start_cell']
-                col_letter = start_cell[0].upper()
-                row_num = int(start_cell[1:])
-                
-                start_row_weekly = row_num - 1
-                start_col_weekly = ord(col_letter) - ord('A')
-                
-                data_df.to_excel(
-                    writer, 
-                    sheet_name=sheet_name, 
-                    startrow=start_row_weekly, 
-                    startcol=start_col_weekly, 
-                    header=True, 
-                    index=False
-                )
-                print(f"Successfully updated '{sheet_name}' sheet.")
-    
-        print("\n✅ All data processed and Excel file updated successfully!")
-        print(f"File updated: {EXCEL_TEMPLATE_PATH}")
-    
-    except Exception as e:
-        print(f"\n❌ An unexpected error occurred during Excel write: {e}")
+        # Convert Cluster back to string if that's the final required format for the Excel sheet
+        rf_star_data['Cluster'] = rf_star_data['Cluster'].astype(str).replace('<NA>', '') # Replace pandas NA value
 
-if __name__ == '__main__':
-    main()
+    else:
+        # Fallback if essential columns are missing
+        rf_star_data = pd.DataFrame(columns=['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
+                                            'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d'])
+
+    # ... (The rest of the main function, including the writing to Excel, remains the same) ...
+    # ... (weekly_reports processing remains the same, calling the updated process_data) ...
