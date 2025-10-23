@@ -7,8 +7,9 @@ from datetime import datetime
 # Define the expected extension for the Excel file
 EXCEL_EXTENSION = '.xlsx' 
 
+# (get_sftp_connection and close_sftp_connection remain the same)
 def get_sftp_connection(host, port, username, password):
-    # ... (same as before) ...
+    """Establishes an SFTP connection and returns the transport and SFTP client."""
     transport = None
     sftp = None
     try:
@@ -23,7 +24,7 @@ def get_sftp_connection(host, port, username, password):
         return None, None
 
 def close_sftp_connection(sftp, transport):
-    # ... (same as before) ...
+    """Closes the SFTP client and transport connection."""
     if sftp:
         sftp.close()
     if transport:
@@ -32,11 +33,23 @@ def close_sftp_connection(sftp, transport):
 def get_latest_remote_file(sftp, remote_file_path, file_prefix):
     """
     Lists files, finds the one matching the prefix/extension, 
-    and returns the name of the latest file based on the timestamp (YYYYMMDDHHMM).
-    """
-    # 🎯 FIX 1: Updated regex to match YYYYMMDDHHMM (12 digits)
-    DATE_PATTERN = r'(\d{12})' 
+    and returns the name of the latest file based on the timestamp.
     
+    The date pattern is now dynamically selected based on the file prefix.
+    """
+    
+    # 🎯 FIX 1: Dynamic Date Pattern Selection
+    if 'Telamon_report_' in file_prefix:
+        # Format: Telamon_report_YYYYMMDDHHMM_xxxx.xlsx
+        DATE_PATTERN = r'(\d{12})'
+    elif '44020_Daily_OV_Update' in file_prefix:
+        # Format: 44020_Daily_OV_Update-YYYY-MM-DD-HH-MM-SS
+        DATE_PATTERN = r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})'
+    else:
+        # Default pattern if needed, but safer to raise an error or use one of the above
+        print(f"Error: Unknown file prefix '{file_prefix}'. Cannot determine date pattern.")
+        return None
+        
     try:
         files = sftp.listdir(remote_file_path)
         target_files = []
@@ -45,7 +58,7 @@ def get_latest_remote_file(sftp, remote_file_path, file_prefix):
             if file.startswith(file_prefix) and file.lower().endswith(EXCEL_EXTENSION):
                 match = re.search(DATE_PATTERN, file)
                 if match:
-                    # Use the 12-digit timestamp as the sort key
+                    # Use the full timestamp (dashed or undashed) as the sort key
                     date_key = match.group(1) 
                     target_files.append((file, date_key))
         
@@ -62,7 +75,7 @@ def get_latest_remote_file(sftp, remote_file_path, file_prefix):
         return None
 
 def download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix):
-    # ... (same as before) ...
+    """Connects, finds the latest file, downloads it, and closes the connection."""
     print(f"Attempting to connect to {host}:{port} for files starting with '{file_prefix}'...")
     
     transport, sftp = get_sftp_connection(host, port, username, password)
@@ -94,7 +107,7 @@ def download_file_from_sftp_to_network(network_path, host, port, username, passw
         close_sftp_connection(sftp, transport)
 
 def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
-    # ... (same as before) ...
+    # (upload_file_to_sftp remains the same)
     transport, sftp = None, None
     try:
         transport, sftp = get_sftp_connection(host, port, username, password)
@@ -107,8 +120,9 @@ def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
     finally:
         close_sftp_connection(sftp, transport)
 
+# --- (The rest of your processing code uses the previous fix for the empty DataFrame) ---
+
 def download_and_process_files():
-    # ... (same as before) ...
     try:
         network_path = r'C:\Users\l5.lopez\Downloads\00_to delete'
         
@@ -127,7 +141,7 @@ def download_and_process_files():
         remote_file_path2 = '/var/data/Support_Data/quickbase/Telamon'
         file_prefix2 = '44020_Daily_OV_Update'
 
-        # Download files
+        # Download files (uses the function with dynamic date pattern)
         tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
         quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
 
@@ -142,98 +156,15 @@ def process_files(quotes_file_path, tracker_file_path, network_path):
     # Read the files
     telamon_df = pd.read_excel(tracker_file_path) 
     
-    # 🎯 FIX 2: Using header=11 instead of skiprows=11 for robust column reading.
-    daily_update_df = pd.read_excel(quotes_file_path, header=11, usecols="B:XFD")
-
-    if daily_update_df.empty:
-        print("⚠️ WARNING: The '44020_Daily_OV_Update' file is still coming empty. Check sheet name or header row index.")
-
-    # Merge the DataFrames
-    merged_df = pd.merge(telamon_df, daily_update_df, 
-                         left_on='P:Viaero Root ID', 
-                         right_on='Rood Other 1 - Site Number', 
-                         suffixes=('_telamon', '_daily_update'), 
-                         how='outer')
-
-    # Identify differences
-    diff_df = pd.DataFrame()
-    for column in telamon_df.columns:
-        if column != 'P:Viaero Root ID':
-            temp_df = merged_df[
-                merged_df[f'{column}_telamon'].astype(str).fillna('') != 
-                merged_df[f'{column}_daily_update'].astype(str).fillna('')
-            ]
-            diff_df = pd.concat([diff_df, temp_df])
-    diff_df = diff_df.drop_duplicates()
-
-    # Create output DataFrame
-    output_df = pd.DataFrame()
-    output_df['Project ID'] = diff_df['Project ID']
-    output_df['Workplan Name'] = 'Viaero_Workplan'
-
-    # Map Project ID
-    output_df['Mapped Project ID'] = output_df['Project ID'].apply(lambda x: str(x).replace('V:(F', 'PF').replace('V:(A', 'AF'))
-
-    # Add other columns from Telamon_report_ file
-    for column in telamon_df.columns:
-        if column != 'Project ID':
-            output_df[column] = diff_df[f'{column}_telamon']
-
-    # Save output file
-    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d")}.csv'
-    output_path = os.path.join(network_path, output_file_name)
-    output_df.to_csv(output_path, index=False)
-
-    # Upload file to SFTP
-    sftp_host = '54.225.75.239'
-    sftp_port = 22
-    sftp_username = 'xxx'
-    sftp_password = 'xxx'
-    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
-    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
-
-download_and_process_files()
-
-
-						
-	44020 Daily OV Update					
-	As of 2025-10-22 07:00:03 Central Standard Time/CST • Generated by Tony Kalanquin					
-						
-						
-	Filtered By					
-	Show: All sites					
-	Initiative # equals 44020					
-	Site Name does not contain OK - BLDG - Other - Site Development					
-	Project Status not equal to Canceled,Rejected					
-						
-	Project ID		Other 1 - Site ID	Other 1 - Site Number	Other 1 - Site Name	Project Status
-	P-070257		800	0800	CO-ARRIBA	Active
-	P-070261		814	0814	CO-LIMON_DT	Active
-	P-070256		180	0180	CO-GENOA_DT	Active
-	P-070258		515	0515	CO-CEDAR_POINT	Active
-	P-070259		856	0856	CO-PROSPECT_EAST	Active
-	P-070260		514	0514	CO-HOYT	On Hold
-	P-070776		580	0580	CO-ARLINGTON	Active
-	P-070777		843	0843	CO-BAR_RANCH	Complete
-
-def process_files(quotes_file_path, tracker_file_path, network_path):
-    # Read the files
-    telamon_df = pd.read_excel(tracker_file_path) 
-    
-    # 🎯 FIX 1: Change header=11 to header=10. 
-    # This targets the 11th row (0-indexed) where 'Project ID' is located.
-    # 🎯 FIX 2: Change usecols="B:XFD" to usecols="A:XFD" 
-    # to ensure all columns, including 'Project ID', are captured.
+    # Using header=10 and usecols="A:XFD" to capture the 'Project ID' header in the 11th row (0-indexed).
     daily_update_df = pd.read_excel(quotes_file_path, header=10, usecols="A:XFD")
 
     if daily_update_df.empty:
-        # A more helpful warning for further debugging
         print("⚠️ WARNING: The '44020_Daily_OV_Update' file is still coming empty. Please verify the actual row number of 'Project ID' in the Excel file.")
 
     # Merge the DataFrames
     merged_df = pd.merge(telamon_df, daily_update_df, 
                          left_on='P:Viaero Root ID', 
-                         # NOTE: The column name in the daily update file is 'Other 1 - Site Number'
                          right_on='Other 1 - Site Number', 
                          suffixes=('_telamon', '_daily_update'), 
                          how='outer')
@@ -242,15 +173,9 @@ def process_files(quotes_file_path, tracker_file_path, network_path):
     diff_df = pd.DataFrame()
     for column in telamon_df.columns:
         if column != 'P:Viaero Root ID':
-            # NOTE: For columns that exist in both, we need to handle the potential lack of a suffix 
-            # if the column name is the same but Pandas didn't rename it due to the suffix parameter.
-            # We are assuming the columns we need to compare have distinct names or were correctly merged.
-            
-            # Use the merged column names for comparison
             telamon_col = f'{column}_telamon'
             daily_col = f'{column}_daily_update'
             
-            # Check if both comparison columns exist before comparing
             if telamon_col in merged_df.columns and daily_col in merged_df.columns:
                 temp_df = merged_df[
                     merged_df[telamon_col].astype(str).fillna('') != 
@@ -269,13 +194,11 @@ def process_files(quotes_file_path, tracker_file_path, network_path):
 
     # Add other columns from Telamon_report_ file
     for column in telamon_df.columns:
-        # If the column from the Telamon file was renamed, use the suffixed name
         telamon_col = column if column == 'Project ID' else f'{column}_telamon'
         
         if telamon_col in diff_df.columns:
             output_df[column] = diff_df[telamon_col]
         elif column in diff_df.columns:
-            # Fallback for columns not involved in the merge key
             output_df[column] = diff_df[column]
 
 
@@ -292,8 +215,4 @@ def process_files(quotes_file_path, tracker_file_path, network_path):
     sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
     upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
 
-# Ensure the rest of the functions (download_file_from_sftp_to_network, get_sftp_connection, etc.) 
-# remain as updated in the previous response, as they contain the fixes for the file 
-# extension (.xlsx) and the Telamon report's timestamp format (YYYYMMDDHHMM).
-
-# download_and_process_files() # Call this to run the entire script
+download_and_process_files()
