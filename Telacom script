@@ -1,3 +1,195 @@
+import paramiko
+import os
+import re
+import pandas as pd
+from datetime import datetime
 
+# Define the expected extension for the Excel file
+EXCEL_EXTENSION = '.xlsx' 
 
-Telamon_report_yyyymmddhhmm_xxxx.xlsx
+def get_sftp_connection(host, port, username, password):
+    # ... (same as before) ...
+    transport = None
+    sftp = None
+    try:
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        return transport, sftp
+    except Exception as e:
+        print(f"Error connecting to SFTP at {host}:{port}: {e}")
+        if transport:
+            transport.close()
+        return None, None
+
+def close_sftp_connection(sftp, transport):
+    # ... (same as before) ...
+    if sftp:
+        sftp.close()
+    if transport:
+        transport.close()
+    
+def get_latest_remote_file(sftp, remote_file_path, file_prefix):
+    """
+    Lists files, finds the one matching the prefix/extension, 
+    and returns the name of the latest file based on the timestamp (YYYYMMDDHHMM).
+    """
+    # 🎯 FIX 1: Updated regex to match YYYYMMDDHHMM (12 digits)
+    DATE_PATTERN = r'(\d{12})' 
+    
+    try:
+        files = sftp.listdir(remote_file_path)
+        target_files = []
+        for file in files:
+            # Filter by prefix AND ensure it's an XLSX file
+            if file.startswith(file_prefix) and file.lower().endswith(EXCEL_EXTENSION):
+                match = re.search(DATE_PATTERN, file)
+                if match:
+                    # Use the 12-digit timestamp as the sort key
+                    date_key = match.group(1) 
+                    target_files.append((file, date_key))
+        
+        if not target_files:
+            print(f"No Excel files found matching prefix '{file_prefix}' and extension '{EXCEL_EXTENSION}' in '{remote_file_path}'.")
+            return None
+
+        # Sort by the timestamp key (latest first)
+        target_files.sort(key=lambda x: x[1], reverse=True)
+        return target_files[0][0]
+        
+    except Exception as e:
+        print(f"Error listing files in '{remote_file_path}': {e}")
+        return None
+
+def download_file_from_sftp_to_network(network_path, host, port, username, password, remote_file_path, file_prefix):
+    # ... (same as before) ...
+    print(f"Attempting to connect to {host}:{port} for files starting with '{file_prefix}'...")
+    
+    transport, sftp = get_sftp_connection(host, port, username, password)
+    
+    if not sftp:
+        return None
+
+    try:
+        latest_file_remote_name = get_latest_remote_file(sftp, remote_file_path, file_prefix)
+        
+        if not latest_file_remote_name:
+            return None
+        
+        remote_full_path = os.path.join(remote_file_path, latest_file_remote_name)
+        local_file_path = os.path.join(network_path, latest_file_remote_name)
+        
+        print(f"Latest remote file: {latest_file_remote_name}. Downloading to: {local_file_path}")
+        
+        # Perform the download
+        sftp.get(remote_full_path, local_file_path)
+        
+        print(f"Download successful. File size on disk (bytes): {os.path.getsize(local_file_path)}")
+        return local_file_path
+        
+    except Exception as e:
+        print(f"An error occurred during file download for prefix '{file_prefix}': {e}")
+        return None
+    finally:
+        close_sftp_connection(sftp, transport)
+
+def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
+    # ... (same as before) ...
+    transport, sftp = None, None
+    try:
+        transport, sftp = get_sftp_connection(host, port, username, password)
+        if sftp:
+            file_name = os.path.basename(file_path)
+            sftp.put(file_path, os.path.join(remote_path, file_name))
+            print(f"Upload successful: {file_name} to {remote_path}")
+    except Exception as e:
+        print(f"An error occurred during file upload: {e}")
+    finally:
+        close_sftp_connection(sftp, transport)
+
+def download_and_process_files():
+    # ... (same as before) ...
+    try:
+        network_path = r'C:\Users\l5.lopez\Downloads\00_to delete'
+        
+        # SFTP credentials
+        host1 = '54.225.75.239'
+        port1 = 22
+        username1 = 'xxx'
+        password1 = 'xxx'
+        remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
+        file_prefix1 = 'Telamon_report_'
+        
+        host2 = '105.52.12.194'
+        port2 = 1022
+        username2 = 'xxx'
+        password2 = 'xxx'
+        remote_file_path2 = '/var/data/Support_Data/quickbase/Telamon'
+        file_prefix2 = '44020_Daily_OV_Update'
+
+        # Download files
+        tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
+        quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
+
+        if tracker_file_path and quotes_file_path:
+            process_files(quotes_file_path, tracker_file_path, network_path)
+        else:
+            print("One or both files failed to download. Comparison aborted.")
+    except Exception as e:
+        print(f"An error occurred during file processing: {e}")
+
+def process_files(quotes_file_path, tracker_file_path, network_path):
+    # Read the files
+    telamon_df = pd.read_excel(tracker_file_path) 
+    
+    # 🎯 FIX 2: Using header=11 instead of skiprows=11 for robust column reading.
+    daily_update_df = pd.read_excel(quotes_file_path, header=11, usecols="B:XFD")
+
+    if daily_update_df.empty:
+        print("⚠️ WARNING: The '44020_Daily_OV_Update' file is still coming empty. Check sheet name or header row index.")
+
+    # Merge the DataFrames
+    merged_df = pd.merge(telamon_df, daily_update_df, 
+                         left_on='P:Viaero Root ID', 
+                         right_on='Rood Other 1 - Site Number', 
+                         suffixes=('_telamon', '_daily_update'), 
+                         how='outer')
+
+    # Identify differences
+    diff_df = pd.DataFrame()
+    for column in telamon_df.columns:
+        if column != 'P:Viaero Root ID':
+            temp_df = merged_df[
+                merged_df[f'{column}_telamon'].astype(str).fillna('') != 
+                merged_df[f'{column}_daily_update'].astype(str).fillna('')
+            ]
+            diff_df = pd.concat([diff_df, temp_df])
+    diff_df = diff_df.drop_duplicates()
+
+    # Create output DataFrame
+    output_df = pd.DataFrame()
+    output_df['Project ID'] = diff_df['Project ID']
+    output_df['Workplan Name'] = 'Viaero_Workplan'
+
+    # Map Project ID
+    output_df['Mapped Project ID'] = output_df['Project ID'].apply(lambda x: str(x).replace('V:(F', 'PF').replace('V:(A', 'AF'))
+
+    # Add other columns from Telamon_report_ file
+    for column in telamon_df.columns:
+        if column != 'Project ID':
+            output_df[column] = diff_df[f'{column}_telamon']
+
+    # Save output file
+    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d")}.csv'
+    output_path = os.path.join(network_path, output_file_name)
+    output_df.to_csv(output_path, index=False)
+
+    # Upload file to SFTP
+    sftp_host = '54.225.75.239'
+    sftp_port = 22
+    sftp_username = 'xxx'
+    sftp_password = 'xxx'
+    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
+    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+
+download_and_process_files()
