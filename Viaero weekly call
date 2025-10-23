@@ -1,241 +1,30 @@
-def process_data(df, target_column_prefix, new_column_name, date_columns):
-    """
-    Filters and processes data for weekly cumulative reports (Sections 4-11).
-    Calculates weekly and cumulative counts based on the 'Actual' completion date.
-    """
-    
-    # 1. Identify Forecast and Actual Completion Date Columns
-    # The 'Actual' column is needed for counting. Assuming the completion date is in the 'A' (Actual) column.
-    col_fcst = next((col for col in df.columns if target_column_prefix.replace('A', 'F') in col), None)
-    col_actual = next((col for col in df.columns if target_column_prefix.replace('F', 'A') in col), None)
-    
-    if not col_fcst or not col_actual:
-        print(f"Warning: Columns for prefix '{target_column_prefix}' not found. Skipping section.")
-        empty_data = {'Task name': [f'{new_column_name} (FCST)', f'{new_column_name} (Actual)', f'{new_column_name} (FCST Cumulative)', f'{new_column_name} (Actual Cumulative)']}
-        empty_df = pd.DataFrame(empty_data)
-        for wk in date_columns: empty_df[wk] = 0
-        return empty_df
+The code is givin the data but I is wrong. 
+In the code we diffined the columns, please see below:
+week_columns = [f'Wk {i}' for i in range(40, 53)]
 
-    # --- Weekly Aggregation Logic (REQUIRED CHANGE) ---
-
-    # Convert the Actual completion column to datetime, ignoring errors
-    df_actual_dates = pd.to_datetime(df[col_actual], errors='coerce').dropna()
-    
-    # Calculate the ISO Week Number (week 1 to 53) from the completion dates
-    # Assuming 'Wk 40' to 'Wk 52' is based on the ISO week number.
-    df_actual_weeks = df_actual_dates.dt.isocalendar().week.astype(int)
-    
-    # Create a mapping for target week column names (e.g., 40 -> 'Wk 40')
-    target_weeks_map = {int(wk.split(' ')[1]): wk for wk in date_columns}
-    
-    # 1. Weekly Actual Counts: Group by the week number and count the sites completed
-    actual_counts_series = df_actual_weeks.value_counts().sort_index()
-    
-    # Initialize counts for all target weeks to 0
-    actual_counts = {wk: 0 for wk in date_columns}
-    
-    # Populate the counts for the target weeks
-    for iso_week, count in actual_counts_series.items():
-        if iso_week in target_weeks_map:
-            actual_counts[target_weeks_map[iso_week]] = count
-
-    # 2. Weekly Forecast Counts (Placeholder, but now structured)
-    # **NOTE:** Your original code used a static '20' for FCST. 
-    # To avoid changing your existing logic for FCST, I'll keep it as a placeholder.
-    # ***You should update this logic to read actual forecast values.***
-    fcst_counts = {wk: 20 for wk in date_columns} 
-    
-    # 3. Cumulative Values
-    # **PLACEHOLDER:** Initial cumulative values (same as original code)
-    PREVIOUS_MONTH_BASE_FCST = 50 
-    PREVIOUS_MONTH_BASE_ACTUAL = 50
-    
-    fcst_cumulative = [PREVIOUS_MONTH_BASE_FCST]
-    actual_cumulative = [PREVIOUS_MONTH_BASE_ACTUAL]
-    
-    # Calculate cumulative values
-    for i, wk in enumerate(date_columns):
-        current_fcst = fcst_counts[wk]
-        current_actual = actual_counts[wk]
-        
-        fcst_cumulative.append(fcst_cumulative[-1] + current_fcst)
-        actual_cumulative.append(actual_cumulative[-1] + current_actual)
-            
-    fcst_cumulative.pop(0)
-    actual_cumulative.pop(0)
-    
-    # 4. Construct the final DataFrame
-    data = {
-        'Task name': [
-            f'{new_column_name} (FCST)', 
-            f'{new_column_name} (Actual)', 
-            f'{new_column_name} (FCST Cumulative)', 
-            f'{new_column_name} (Actual Cumulative)'
-        ]
-    }
-    
-    # Add the weekly data
-    for i, wk in enumerate(date_columns):
-        data[wk] = [
-            fcst_counts[wk], 
-            actual_counts[wk], 
-            fcst_cumulative[i], 
-            actual_cumulative[i]
-        ]
-        
-    return pd.DataFrame(data)
-
-
-
-def main():
-    # ... (SFTP download and file loading code remains the same) ...
-    # ... (week_columns definition remains the same) ...
+But I think we're not doing the count propertly and matching the week, with the count week. 
+For example, for the sheet A&E Site Walks, the row A&E - Site Walk (FCST) is freeze with the number 20, for all columns, but if I do manually the count, the value that I have for the week 40 is 7, and for actual is 6 for the forescast portion, Looksl ike Actual portion is doing the logic, but using the Forescast columns (F, no the actual (A
 
     # ---------------------------------------------------------------------------------------------------
-    # --- 3. Process data for 'RF Star' sheet ---
-    
-    col_phase = next((col for col in df.columns if 'P:Viaero Phase' in col), None)
-    col_cluster = next((col for col in df.columns if 'P:Cluster ID' in col), None)
-    col_project_type = next((col for col in df.columns if 'P:Viaero Project Type' in col), None)
-    
-    if col_phase and col_cluster and col_project_type:
-        df_phase2 = df[df[col_phase] == 'Phase 2'].copy()
-        
-        # Define the date-based columns to be counted (Request 2)
-        count_cols = {
-            'RFDS Submitted': 'V:(A 1050) RF Design RFDS Submitted to Customer-Finish',
-            'RFDS Approved': 'V:(A 1055) RF Design RFDS Approved by Customer-Finish',
-            'ACD Submitted': 'V:(A 2870) ACD Submitted to Customer-Finish',
-            'TVW Received': 'V:(A 3200) TVW Received-Finish',
-            'TED Recv\'d': 'V:(A 2380) BH Transport CQ Received/TED FORM-Finish'
-        }
-        
-        # Ensure date columns are proper datetime objects for accurate non-null counting
-        for col in count_cols.values():
-            if col in df_phase2.columns:
-                # Coerce to datetime; non-dates become NaT (NaT is non-existent/null)
-                df_phase2[col] = pd.to_datetime(df_phase2[col], errors='coerce')
-        
-        # Aggregation Dictionary for GroupBy
-        # The key for the aggregation is the column in df_phase2, the value is a tuple ('New Column Name', aggregation_function)
-        agg_dict = {
-            # Total Sites
-            col_cluster: ('Total Sites', 'size'),
-            
-            # H// and E// Counts (Assuming 'H//' and 'E//' must be part of the string)
-            col_project_type: [
-                ('H// Count', lambda x: (x.str.contains('H//', na=False)).sum()), 
-                ('E// Count', lambda x: (x.str.contains('E//', na=False)).sum()),
-                # Growth Count (Request 3: Count when P:Viaero Project Type is exactly 'S// NSB')
-                ('Growth', lambda x: (x == 'S// NSB').sum()), 
-            ]
-        }
-        
-        # Add the date-based count columns to the aggregation (Request 2)
-        for new_name, existing_name in count_cols.items():
-            if existing_name in df_phase2.columns:
-                # Count non-null values (i.e., dates) within the group for the specified column
-                agg_dict[existing_name] = (new_name, lambda x: df_phase2.loc[x.index, existing_name].notna().sum())
-            else:
-                 # Add a placeholder if the column is missing
-                agg_dict[existing_name] = (new_name, lambda x: 0)
-
-        # Group and aggregate
-        # Use .agg() with the dictionary to rename and perform calculations simultaneously
-        df_grouped = df_phase2.groupby(col_cluster).agg(agg_dict).reset_index()
-        
-        # Clean up column names from the multi-index created by agg (if applicable)
-        # Flatten the column index if it resulted in a multi-index (common when using a list for aggregation)
-        if isinstance(df_grouped.columns, pd.MultiIndex):
-            new_columns = []
-            for col in df_grouped.columns:
-                if col[1] == '':
-                    new_columns.append(col[0]) # Cluster column
-                else:
-                    new_columns.append(col[1]) # Aggregated columns
-            df_grouped.columns = new_columns
-        
-        # Rename the cluster column
-        df_grouped = df_grouped.rename(columns={col_cluster: 'Cluster'})
-
-        # --- Request 1: Convert Cluster to numeric and sort ---
-        # Convert Cluster column to numeric, forcing errors to NaT (which will be sorted at the end/start)
-        df_grouped['Cluster'] = pd.to_numeric(df_grouped['Cluster'], errors='coerce')
-
-        # Select columns and sort
-        rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                    'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']].copy()
-
-        # Sort by the numeric 'Cluster' column
-        rf_star_data = rf_star_data.sort_values(by='Cluster', na_position='last')
-        
-        # Convert Cluster back to string if that's the final required format for the Excel sheet
-        rf_star_data['Cluster'] = rf_star_data['Cluster'].astype(str).replace('<NA>', '') # Replace pandas NA value
-
-    else:
-        # Fallback if essential columns are missing
-        rf_star_data = pd.DataFrame(columns=['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                            'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d'])
-
-    # ... (The rest of the main function, including the writing to Excel, remains the same) ...
-    # ... (weekly_reports processing remains the same, calling the updated process_data) ...
-
-
-# --- Replacement for the Aggregation and Grouping Block ---
-# (This code should replace the old df_grouped creation block in your main function)
-
-if col_phase and col_cluster and col_project_type:
-    df_phase2 = df[df[col_phase] == 'Phase 2'].copy()
-    
-    # Define the date-based columns to be counted (Request 2)
-    count_cols = {
-        'RFDS Submitted': 'V:(A 1050) RF Design RFDS Submitted to Customer-Finish',
-        'RFDS Approved': 'V:(A 1055) RF Design RFDS Approved by Customer-Finish',
-        'ACD Submitted': 'V:(A 2870) ACD Submitted to Customer-Finish',
-        'TVW Received': 'V:(A 3200) TVW Received-Finish',
-        'TED Recv\'d': 'V:(A 2380) BH Transport CQ Received/TED FORM-Finish'
-    }
-    
-    # Ensure date columns are proper datetime objects for accurate non-null counting
-    for col in count_cols.values():
-        if col in df_phase2.columns:
-            df_phase2[col] = pd.to_datetime(df_phase2[col], errors='coerce')
-
-    # Use named aggregation to ensure column names are correctly set (THE FIX)
-    aggregations = {
-        'Total Sites': (col_cluster, 'size'),
-        'H// Count': (col_project_type, lambda x: (x.str.contains('H//', na=False)).sum()),
-        'E// Count': (col_project_type, lambda x: (x.str.contains('E//', na=False)).sum()),
-        # Request 3: Count when P:Viaero Project Type is exactly 'S// NSB'
-        'Growth': (col_project_type, lambda x: (x == 'S// NSB').sum()), 
+    # --- 4-11. Process data for Weekly Sheets ---
+    weekly_reports = {
+        'A&E Site Walks': {'prefix': 'V:(F 1115)', 'name': 'A&E - Site Walk', 'start_cell': 'C4'},
+        'LE & Grd BOM': {'prefix': 'V:(F 1135)', 'name': 'A&E - Cable BOM and LE', 'start_cell': 'C4'},
+        'PCDs': {'prefix': 'V:(F 1142)', 'name': 'A&E - Preliminary CDs', 'start_cell': 'C4'},
+        'Final CDs': {'prefix': 'V:(F 1146)', 'name': 'A&E - Final CDs', 'start_cell': 'C4'},
+        'Ground NTPs': {'prefix': 'V:(F 3345)', 'name': 'Ground NTP', 'start_cell': 'C4'},
+        'Ground CxS': {'prefix': 'V:(F 3370)', 'name': 'Ground CxS', 'start_cell': 'C4'},
+        'Ground CxC': {'prefix': 'V:(F 3460)', 'name': 'Ground CxC', 'start_cell': 'C4'},
+        'Ground COP': {'prefix': 'V:(F 3550)', 'name': 'Ground COP', 'start_cell': 'C4'},
     }
 
-    # Add the date-based count columns (Request 2)
-    for new_name, existing_name in count_cols.items():
-        if existing_name in df_phase2.columns:
-            # Count non-null values (i.e., dates) within the group for the specified column
-            aggregations[new_name] = (existing_name, lambda x: x.notna().sum())
-        else:
-            aggregations[new_name] = (existing_name, lambda x: 0)
+    processed_weekly_data = {}
+    for sheet_name, config in weekly_reports.items():
+        processed_weekly_data[sheet_name] = process_data(
+            df, 
+            config['prefix'], 
+            config['name'], 
+            week_columns
+        )
 
-
-    # Group and aggregate using the named aggregation dictionary
-    df_grouped = df_phase2.groupby(col_cluster).agg(**aggregations).reset_index()
-    
-    # Rename the cluster column
-    df_grouped = df_grouped.rename(columns={col_cluster: 'Cluster'})
-
-    # --- Request 1: Convert Cluster to numeric and sort ---
-    df_grouped['Cluster'] = pd.to_numeric(df_grouped['Cluster'], errors='coerce')
-
-    # Select columns
-    rf_star_data = df_grouped[['Cluster', 'Total Sites', 'H// Count', 'E// Count', 'Growth', 
-                                'RFDS Submitted', 'RFDS Approved', 'ACD Submitted', 'TVW Received', 'TED Recv\'d']].copy()
-
-    # Sort by the numeric 'Cluster' column
-    rf_star_data = rf_star_data.sort_values(by='Cluster', na_position='last')
-    
-    # Convert Cluster back to string
-    rf_star_data['Cluster'] = rf_star_data['Cluster'].astype(str).replace('<NA>', '') 
-
-# ... (The rest of the main function continues) ...
+Could you please help me to review?
