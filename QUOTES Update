@@ -1,23 +1,259 @@
-# ====================================================================
-# === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
-# ====================================================================
-if not df_diff.empty:
-    df_output = df_diff[[
-        # *** FIX: Use the full prefix column name generated during the merge ***
-        'Full_Quote_ID_Prefix_quotes', 
-        'Submittal Date',
-        'Document Type - RAN',
-        # ... rest of the columns ...
-    ]].rename(columns={
-        # *** FIX: Rename the full prefix column for the final output ***
-        'Full_Quote_ID_Prefix_quotes': 'QUOTE_TRACKER_XITOR_KEY',
-        'Submittal Date': 'QT_SUBMITTAL_DATE',
-        'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
-        'Review History': 'QT_QB__REVIEW_HISTORY',
-        'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
-        'Date Approved': 'QT_QB__DATE_APPROVED',
-        'Rejection Notes': 'QT_QB__REJECTION_NOTES',
-        'Redline Notes': 'QT_QB_RED_LINE_NOTES'
-    })
+import pandas as pd
+import paramiko
+import os
+from datetime import datetime
+import re 
+
+def upload_file_to_sftp(local_file_path, host, port, username, password, remote_file_path):
+    ssh = None
+    sftp = None
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+        
+        # Get the filename from the local file path
+        filename = os.path.basename(local_file_path)
+        
+        # Upload the file
+        full_remote_path = os.path.join(remote_file_path, filename)
+        sftp.put(local_file_path, full_remote_path)
+        print(f"File uploaded successfully to {full_remote_path}")
+        
+    except Exception as e:
+        print(f"Error uploading file: {e}")
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def get_latest_file(sftp, remote_file_path, file_prefix):
+    """
+    Get the latest file from the SFTP server based on the file prefix.
+    """
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        if file.startswith(file_prefix):
+            try:
+                file_stat = sftp.stat(os.path.join(remote_file_path, file))
+                timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
+    """
+    Downloads a single file from an SFTP server to a specified network directory.
+    Returns the full local path of the downloaded file.
+    """
+    print(f"Starting SFTP file download for prefix: {file_prefix}")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
+        if latest_file:
+            full_remote_path = os.path.join(remote_file_path, latest_file)
+            full_local_path = os.path.join(output_network_path, latest_file)
+            print(f"Downloading file: {full_remote_path} to {full_local_path}")
+            try:
+                sftp.get(full_remote_path, full_local_path)
+                print(f"File downloaded successfully to {full_local_path}")
+                return full_local_path
+            except Exception as e:
+                print(f"Error downloading file: {e}")
+        else:
+            print(f"No matching files found with prefix {file_prefix} in the specified SFTP directory.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def process_and_compare_files(quote_report_path, quote_tracker_path):
+    """
+    Reads the two files, uses REGEX to cleanly extract Quote ID, creates a 
+    SITE# + QUOTE_ID composite key, and compares the files.
+    """
+    print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
     
-    # ... rest of the output logic
+    # Define a regex pattern to reliably extract the core Quote ID (e.g., 'SV0282.00')
+    QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
+    
+    try:
+        df_quotes = pd.read_csv(quote_report_path)
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError as e:
+        print(f"Error: One of the downloaded files was not found at its local path. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names (remove leading/trailing spaces)
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    
+    print("--- DF_TRACKER COLUMNS ---", df_tracker.columns.tolist())
+
+    # --- Data Standardization for Merge ---
+
+    # 1. Process Quotes Report (df_quotes)
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+
+    if 'Document' in df_quotes.columns:
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID (e.g., SV0282.00)
+        df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        
+        if df_quotes['QT:Quote ID'].eq('').all():
+             print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
+             return
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
+
+    # 2. Process Quote Tracker (df_tracker) - HARDENED AGAINST KeyError
+    REQUIRED_ROOT_ID_COL = 'QT:Root Cell ID'
+    REQUIRED_QUOTE_ID_COL = 'QT:Quote ID'
+    TARGET_SITE_COL = 'Site #'
+    
+    # 2a. Safely process and rename 'QT:Root Cell ID'
+    if REQUIRED_ROOT_ID_COL in df_tracker.columns:
+        df_tracker[TARGET_SITE_COL] = df_tracker[REQUIRED_ROOT_ID_COL]
+        df_tracker[TARGET_SITE_COL] = df_tracker[TARGET_SITE_COL].astype(str).str.strip().str.upper().str.zfill(4)
+        df_tracker.drop(columns=[REQUIRED_ROOT_ID_COL], errors='ignore', inplace=True)
+    else:
+        print(f"Error: The required '{REQUIRED_ROOT_ID_COL}' was not found in the Tracker file.")
+        return
+    
+    # 2b. Safely process 'QT:Quote ID'
+    if REQUIRED_QUOTE_ID_COL in df_tracker.columns:
+        extracted_ids = df_tracker[REQUIRED_QUOTE_ID_COL].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        df_tracker[REQUIRED_QUOTE_ID_COL] = extracted_ids
+    else:
+        print(f"Error: The required '{REQUIRED_QUOTE_ID_COL}' column was not found in the Tracker file.")
+        return
+
+    # --- CRITICAL FIX: Create Composite Merge Key (Ensures String Type) ---
+    # Explicitly casting to string prevents the ufunc 'add' error
+    df_quotes['MERGE_KEY'] = df_quotes['Site #'].astype(str) + '_' + df_quotes['QT:Quote ID'].astype(str)
+    df_tracker['MERGE_KEY'] = df_tracker['Site #'].astype(str) + '_' + df_tracker['QT:Quote ID'].astype(str)
+
+    # --- De-duplicate df_quotes to keep only the latest Report entry ---
+    
+    # 1. Create a temporary column for de-duplication (e.g., 'Quote_SV0319.00')
+    # THIS PREVENTS MERGE CONFLICTS LATER
+    df_quotes['TEMP_QUOTE_ID_PREFIX'] = df_quotes['Document'].str.split('-', n=1).str[0]
+    
+    # 2. Sort the Report data by the temporary column (asc) and Review History (desc)
+    df_quotes = df_quotes.sort_values(by=['TEMP_QUOTE_ID_PREFIX', 'Review History'], ascending=[True, False])
+    
+    # 3. Remove duplicates
+    df_quotes = df_quotes.drop_duplicates(subset='TEMP_QUOTE_ID_PREFIX', keep='first')
+    
+    # 4. CRITICAL: Drop the temporary column before the merge to prevent suffix conflict
+    df_quotes.drop(columns=['TEMP_QUOTE_ID_PREFIX'], inplace=True) 
+    
+    # --- Merge on the unique "MERGE_KEY" ---
+    merged_df = pd.merge(
+        df_quotes,
+        df_tracker,
+        on='MERGE_KEY',
+        how='left',
+        suffixes=('_quotes', '_tracker')
+    )
+    
+    # ** Diagnostic Check **
+    if merged_df['Site #_tracker'].isnull().all() and not df_quotes.empty:
+        print("\n*** WARNING: ALL TRACKER COLUMNS ARE LIKELY BLANK (MERGE FAILURE) ***")
+        
+    # --- Comparison Logic ---
+    # Requirement 3: Concatenate key columns from Quotes_Report_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #_quotes', 'Document Type - RAN', 'Review History',
+        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 4: Concatenate key columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'Site #_tracker', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # Requirement 5: Compare and find differences
+    df_diff = merged_df[(merged_df['Conca_quotes'] != merged_df['Conca_tracker']) | merged_df['Site #_tracker'].isnull()]
+    
+    # Remove rows where the Report's Quote ID was invalid (blank)
+    df_diff = df_diff[df_diff['QT:Quote ID_quotes'].notna() & (df_diff['QT:Quote ID_quotes'] != '')]
+
+    # Remove duplicates and keep the latest based on QT_QB_REVIEW_HISTORY
+    df_diff = df_diff.sort_values(by=['QT:Quote ID_quotes', 'QT:QB - Review History'], ascending=[True, False])
+    df_diff = df_diff.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
+    
+    # ====================================================================
+    # === OUTPUT: DEBUG/COMPARISON FILE (Raw data of differences) ===
+    # ====================================================================
+    if not df_diff.empty:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
+        debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name)
+        
+        df_diff.to_excel(debug_output_path, index=False)
+        print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences (merged raw data) saved to: {debug_output_path}")
+
+    # ====================================================================
+    # === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
+    # ====================================================================
+    if not df_diff.empty:
+        # FIX: Re-create the full prefix ID on df_diff using the 'Document_quotes' column
+        df_diff['FULL_PREFIX_KEY'] = df_diff['Document_quotes'].str.split('-', n=1).str[0]
+        
+        df_output = df_diff[[
+            'FULL_PREFIX_KEY', 
+            'Submittal Date',
+            'Document Type - RAN',
+            'Review History',
+            'Doc Review Status Text',
+            'Date Approved',
+            'Rejection Notes',
+            'Redline Notes'
+        ]].rename(columns={
+            # Rename the new key for the final output
+            'FULL_PREFIX_KEY': 'QUOTE_TRACKER_XITOR_KEY',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
+            'Review History': 'QT_QB__REVIEW_HISTORY',
+            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'Date Approved': 'QT_QB__DATE_APPROVED',
+            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
+        })
+        
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_QUOTE_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
+        df_output.to_excel(output_path, index=False)
+        print(f"Final Discrepancy Report saved to: {output_path}")
