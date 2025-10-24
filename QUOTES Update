@@ -1,150 +1,21 @@
-import paramiko
-import os
-import re
-import pandas as pd
-from datetime import datetime
-
-# --- Configuration ---
-EXCEL_EXTENSION = '.xlsx'
-# Define a regex pattern to reliably extract the core Quote ID (e.g., 'SV0282.00')
-# Adjust this if your actual Quote IDs follow a different format.
-QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
-
-# --- SFTP Helper Functions ---
-
-def upload_file_to_sftp(local_file_path, host, port, username, password, remote_file_path):
-    """Uploads a file to an SFTP server."""
-    ssh = None
-    sftp = None
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(host, port=port, username=username, password=password)
-        sftp = ssh.open_sftp()
-        
-        # Get the filename from the local file path
-        filename = os.path.basename(local_file_path)
-        
-        # Upload the file
-        full_remote_path = os.path.join(remote_file_path, filename)
-        sftp.put(local_file_path, full_remote_path)
-        print(f"File uploaded successfully to {full_remote_path}")
-        
-    except Exception as e:
-        print(f"Error uploading file: {e}")
-    finally:
-        if sftp:
-            sftp.close()
-        if ssh:
-            ssh.close()
-
-def get_latest_file(sftp, remote_file_path, file_prefix):
-    """
-    Gets the latest file from the SFTP server based on file prefix and dynamic date pattern.
-    """
-    
-    # Define Date Pattern based on file prefix
-    if 'Telamon_report_' in file_prefix:
-        # Format: Telamon_report_YYYYMMDDHHMM_xxxx.xlsx
-        DATE_PATTERN = r'(\d{12})'
-        # Fallback to st_mtime if regex fails for this file
-        use_timestamp_fallback = True
-    elif '44020_Daily_OV_Update' in file_prefix:
-        # Format: 44020_Daily_OV_Update-YYYY-MM-DD-HH-MM-SS
-        DATE_PATTERN = r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})'
-        # Fallback to st_mtime if regex fails for this file
-        use_timestamp_fallback = True 
-    else:
-        # For other prefixes, rely on st_mtime as the only sort method
-        DATE_PATTERN = None 
-        use_timestamp_fallback = True
-
-    files = sftp.listdir(remote_file_path)
-    target_files = []
-
-    for file in files:
-        if file.startswith(file_prefix) and file.lower().endswith(EXCEL_EXTENSION):
-            
-            # --- Try sorting by Regex Timestamp first ---
-            if DATE_PATTERN:
-                match = re.search(DATE_PATTERN, file)
-                if match:
-                    # Use the extracted timestamp for sorting
-                    target_files.append((file, match.group(1), None))
-                    continue # Skip st_mtime if regex is successful
-            
-            # --- Fallback: Sort by modification time (st_mtime) ---
-            if use_timestamp_fallback:
-                try:
-                    file_stat = sftp.stat(os.path.join(remote_file_path, file))
-                    # The second element is the timestamp string, third is the modification time
-                    target_files.append((file, None, file_stat.st_mtime))
-                except Exception as e:
-                    print(f"Could not stat file {file}: {e}")
-                    continue
-
-    if not target_files:
-        print(f"No Excel files found matching prefix '{file_prefix}' in '{remote_file_path}'.")
-        return None
-
-    # Sort logic: 1. By regex date string (latest first). 2. By st_mtime (latest first)
-    target_files.sort(key=lambda x: (x[1] if x[1] is not None else '', x[2] if x[2] is not None else 0), reverse=True)
-    
-    return target_files[0][0]
-
-def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
-    """
-    Downloads the latest file from an SFTP server to a specified network directory.
-    """
-    print(f"Starting SFTP file download for prefix: {file_prefix}")
-    ssh = None
-    sftp = None
-    try:
-        os.makedirs(output_network_path, exist_ok=True)
-
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(host, port=port, username=username, password=password)
-        sftp = ssh.open_sftp()
-
-        # Uses the updated function with dynamic date pattern and fallback
-        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
-        if latest_file:
-            full_remote_path = os.path.join(remote_file_path, latest_file)
-            full_local_path = os.path.join(output_network_path, latest_file)
-            print(f"Downloading file: {full_remote_path} to {full_local_path}")
-            try:
-                sftp.get(full_remote_path, full_local_path)
-                print(f"File downloaded successfully to {full_local_path}")
-                return full_local_path
-            except Exception as e:
-                print(f"Error downloading file: {e}")
-        else:
-            print(f"No matching files found with prefix {file_prefix} in the specified SFTP directory.")
-            return None
-
-    except Exception as e:
-        print(f"An error occurred during SFTP download: {e}")
-        return None
-    finally:
-        if sftp:
-            sftp.close()
-        if ssh:
-            ssh.close()
-
-# --- Main Processing Logic ---
-
 def process_and_compare_files(quote_report_path, quote_tracker_path):
     """
     Reads the two files, cleans and standardizes the data, and performs the comparison.
     """
     print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
     
+    # Define a regex pattern to reliably extract the core Quote ID (e.g., 'SV0282.00')
+    QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
+    
     try:
-        # Assuming the Quote Report is the 44020_Daily_OV_Update (xlsx) and the Tracker is Telamon (xlsx)
-        # 🎯 FIX: Read the Quote Report file with correct parameters (header=10, usecols="A:XFD")
-        df_quotes = pd.read_excel(quote_report_path, header=10, usecols="A:XFD", engine='openpyxl')
+        # 🎯 FIX 1: Read the Quote Report file as CSV.
+        # Assuming the 'Project ID' header is in the 11th row, we need to skip 10 rows.
+        # We also need to specify the delimiter if it's not a comma (assuming comma for now).
+        df_quotes = pd.read_csv(quote_report_path, skiprows=10) 
+        
+        # Read the Quote Tracker file (Telamon_report_) as Excel (assuming it's .xlsx)
         df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+        
     except FileNotFoundError as e:
         print(f"Error: One of the downloaded files was not found at its local path. Details: {e}")
         return
@@ -158,16 +29,18 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
     
     # Check if the Quote Report file is empty due to incorrect header/column reading
     if df_quotes.empty:
-        print("⚠️ ERROR: The Quote Report DataFrame is empty. Verify the `header` and `usecols` parameters in pd.read_excel().")
+        print("⚠️ ERROR: The Quote Report DataFrame is empty. Verify the `skiprows` parameter or delimiter in pd.read_csv().")
         return
 
     # --- Data Standardization for Merge ---
 
-    # 1. Process Quotes Report (44020_Daily_OV_Update)
-    if 'Other 1 - Site Number' in df_quotes.columns: # Changed from 'Site #' based on provided data
+    # 1. Process Quotes Report (Now CSV)
+    # The header is now expected to be 'Project ID', 'Other 1 - Site ID', 'Other 1 - Site Number', etc.
+    if 'Other 1 - Site Number' in df_quotes.columns:
         df_quotes.rename(columns={'Other 1 - Site Number': 'Site #'}, inplace=True)
         df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
     else:
+        # If 'Other 1 - Site Number' isn't found, check for the column name we've been using previously.
         print("Error: The required 'Other 1 - Site Number' column was not found in the report.")
         return
     
@@ -180,7 +53,7 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         print("Error: The required 'Document' column was not found in the report.")
         return
     
-    # 🎯 FIX: Robust Review History Extraction (from previous fix)
+    # Robust Review History Extraction (Fix for date/time error)
     if 'Review History' in df_quotes.columns:
         review_history_series = df_quotes['Review History'].astype(str).str.strip()
         
@@ -211,7 +84,7 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         print("Error: The required 'Review History' column was not found in the report.")
         return
 
-    # 2. Process Quote Tracker (Telamon_report)
+    # 2. Process Quote Tracker (Telamon_report) - Remains the same
     if 'QT:Root Cell ID' in df_tracker.columns:
         df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
         df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
@@ -239,6 +112,8 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         suffixes=('_quotes', '_tracker')
     )
     
+    # ... (Rest of the comparison and output logic remains the same) ...
+
     # Diagnostic Check
     if merged_df['Site #_tracker'].isnull().all() and not df_quotes.empty:
         print("\n*** WARNING: ALL TRACKER COLUMNS ARE LIKELY BLANK (MERGE FAILURE) ***")
@@ -269,7 +144,6 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         # DEBUG/COMPARISON FILE
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
-        # Assuming we save to the same directory as the input files
         debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name) 
         df_diff.to_excel(debug_output_path, index=False)
         print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences saved to: {debug_output_path}")
@@ -300,37 +174,3 @@ def process_and_compare_files(quote_report_path, quote_tracker_path):
         output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
         df_output.to_excel(output_path, index=False)
         print(f"Final Discrepancy Report saved to: {output_path}")
-
-# --- Execution Block ---
-
-def run_workflow():
-    try:
-        network_path = r'C:\Users\l5.lopez\Downloads\00_to delete'
-        
-        # --- SFTP Credentials and Paths ---
-        # Note: You need to replace 'xxx' with actual credentials
-        HOST1, PORT1, USER1, PASS1 = '54.225.75.239', 22, 'xxx', 'xxx'
-        REMOTE_PATH1, PREFIX1 = '/home/samsung_sea2/es/Rancomm/', 'Telamon_report_'
-        
-        HOST2, PORT2, USER2, PASS2 = '105.52.12.194', 1022, 'xxx', 'xxx'
-        REMOTE_PATH2, PREFIX2 = '/var/data/Support_Data/quickbase/Telamon', '44020_Daily_OV_Update'
-
-        # Download Quote Tracker (Telamon_report_) - Should be the tracker file
-        quote_tracker_path = download_file_from_sftp_to_network(network_path, HOST1, PORT1, USER1, PASS1, REMOTE_PATH1, PREFIX1)
-        
-        # Download Quote Report (44020_Daily_OV_Update) - Should be the report file
-        quote_report_path = download_file_from_sftp_to_network(network_path, HOST2, PORT2, USER2, PASS2, REMOTE_PATH2, PREFIX2)
-        
-        # The logic below assumes: 
-        #   quote_report_path = 44020_Daily_OV_Update (Needs header=10 fix)
-        #   quote_tracker_path = Telamon_report_ (Normal read)
-        
-        if quote_report_path and quote_tracker_path:
-            process_and_compare_files(quote_report_path, quote_tracker_path)
-        else:
-            print("One or both required files failed to download. Comparison aborted.")
-    except Exception as e:
-        print(f"An error occurred during file processing: {e}")
-
-# Call the main function
-run_workflow()
