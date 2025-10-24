@@ -1,28 +1,21 @@
-# In the 'process_and_compare_files' function:
+try:
+    df_quotes = pd.read_csv(quote_report_path)
+    df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+except FileNotFoundError as e:
+    # ...
 
-# ... (The rest of the code before this section)
+# Clean column names
+df_quotes.columns = df_quotes.columns.str.strip()
+df_tracker.columns = df_tracker.columns.str.strip()
 
-# 2. Process Quote Tracker
-if 'QT:Root Cell ID' in df_tracker.columns:
-    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
-    df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-else:
-    print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
+# *** ADD THIS BLOCK FOR ROBUST COLUMN HANDLING ***
+# 1. Standardize column names by removing special/non-alphanumeric characters.
+#    This converts 'QT:Quote ID ' (with hidden char) to 'QT:QuoteID'
+df_tracker.columns = df_tracker.columns.str.replace(r'[^a-zA-Z0-9]', '', regex=True)
 
-
-    return
-
-# --- FIX APPLIED HERE ---
-# 1. Use the correct column name for the check.
-ACTUAL_QUOTE_ID_COL_NAME = 'QT:Quote ID' 
-
-if ACTUAL_QUOTE_ID_COL_NAME in df_tracker.columns:
-    # 2. Access the column, apply the logic, and then assign the result.
-    #    This prevents issues where the assignment itself might be confused.
-    extracted_ids = df_tracker[ACTUAL_QUOTE_ID_COL_NAME].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
-    df_tracker[ACTUAL_QUOTE_ID_COL_NAME] = extracted_ids
-else:
-    print(f"Error: The required '{ACTUAL_QUOTE_ID_COL_NAME}' column was not found in the Tracker file.")
-    return
-
-# ... (The rest of the code continues)
+# 2. Rename the affected columns to their expected *cleaned* names.
+df_tracker.rename(columns={
+    'QTQuoteID': 'QT:Quote ID',          # The one that is currently failing
+    'QTRootCellID': 'QT:Root Cell ID'    # The one that is renamed later
+}, inplace=True)
+# **********************************************
