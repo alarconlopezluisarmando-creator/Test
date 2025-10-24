@@ -1,4 +1,26 @@
-df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
-print("--- DF_TRACKER COLUMNS ---", df_tracker.columns.tolist()) # <--- ADD THIS LINE
-# The next line cleans columns, so the error happens after this, but check the raw list.
-df_tracker.columns = df_tracker.columns.str.strip() 
+# In the 'process_and_compare_files' function:
+
+# ... (The rest of the code before this section)
+
+# 2. Process Quote Tracker
+if 'QT:Root Cell ID' in df_tracker.columns:
+    df_tracker.rename(columns={'QT:Root Cell ID': 'Site #'}, inplace=True)
+    df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+else:
+    print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
+    return
+
+# --- FIX APPLIED HERE ---
+# 1. Use the correct column name for the check.
+ACTUAL_QUOTE_ID_COL_NAME = 'QT:Quote ID' 
+
+if ACTUAL_QUOTE_ID_COL_NAME in df_tracker.columns:
+    # 2. Access the column, apply the logic, and then assign the result.
+    #    This prevents issues where the assignment itself might be confused.
+    extracted_ids = df_tracker[ACTUAL_QUOTE_ID_COL_NAME].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+    df_tracker[ACTUAL_QUOTE_ID_COL_NAME] = extracted_ids
+else:
+    print(f"Error: The required '{ACTUAL_QUOTE_ID_COL_NAME}' column was not found in the Tracker file.")
+    return
+
+# ... (The rest of the code continues)
