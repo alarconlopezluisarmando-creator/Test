@@ -1,3 +1,25 @@
---- Starting comparison between: Quotes_Report_2025-10-24_10-33-28.csv and Quote_Tracker_Data_202510240801_57765.xlsx ---
---- DF_TRACKER COLUMNS --- ['P:Project ID', 'QT:Root Cell ID', 'QT:SPMS Site ID', 'QT:Site Name', 'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Doc Review Status Text', 'QT:QB - Submittal Date', 'QT:QB - Date Approved', 'QT:QB - Rejection Notes', 'QT:QB - Review History']
-An error occurred during file processing: 'QT:Quote ID'
+    # 2. Process Quote Tracker
+    REQUIRED_ROOT_ID_COL = 'QT:Root Cell ID'
+    TARGET_SITE_COL = 'Site #'
+    
+    if REQUIRED_ROOT_ID_COL in df_tracker.columns:
+        # Use a dictionary to create the new column from the old one, which is safer than rename(inplace=True)
+        df_tracker[TARGET_SITE_COL] = df_tracker[REQUIRED_ROOT_ID_COL]
+        
+        # Now process the new 'Site #' column
+        df_tracker[TARGET_SITE_COL] = df_tracker[TARGET_SITE_COL].astype(str).str.strip().str.upper().str.zfill(4)
+        
+        # Optional: Drop the original column if you don't need it anymore
+        df_tracker.drop(columns=[REQUIRED_ROOT_ID_COL], errors='ignore', inplace=True)
+    else:
+        print(f"Error: The required '{REQUIRED_ROOT_ID_COL}' was not found in the Tracker file.")
+        return
+    
+    # --- The processing for QT:Quote ID should now work ---
+    if 'QT:Quote ID' in df_tracker.columns:
+        # Using a safer two-step assignment as suggested before
+        extracted_ids = df_tracker['QT:Quote ID'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        df_tracker['QT:Quote ID'] = extracted_ids
+    else:
+        print("Error: The required 'QT:Quote ID' column was not found in the Tracker file (after processing).")
+        return
