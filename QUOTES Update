@@ -1,1 +1,8 @@
-QUOTE ID is coming in the colum Document like Quote_SV0319.00-Service_BMS_1_10-14-2025.xlsx so we need to extract the Quote ID too, at the end needs to be something like Quote_SV0319.00
+# Extract the Quote ID from the Document column
+# It splits the string by the first occurrence of '-', and keeps the first part
+Quotes_Summary_['QT:Quote ID_quotes'] = Quotes_Summary_['Document'].str.split('-', n=1).str[0]
+
+# --- Optional: Complete the duplicate removal process again ---
+# Remove duplicates and keep the latest based on Review History
+Quotes_Summary_ = Quotes_Summary_.sort_values(by=['QT:Quote ID_quotes', 'Review History'], ascending=[True, False])
+Quotes_Summary_ = Quotes_Summary_.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
