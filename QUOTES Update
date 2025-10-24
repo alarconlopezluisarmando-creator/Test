@@ -1,7 +1,1 @@
-I have this portion of code, but I need to do the same for the file Quotes_Summary_ with the coloumn Review History, 
-
-could you help me to update this portionl.
-
-# Remove duplicates and keep the latest based on QT_QB_REVIEW_HISTORY
-df_diff = df_diff.sort_values(by=['QT:Quote ID_quotes', 'QT:QB - Review History'], ascending=[True, False])
-df_diff = df_diff.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
+QUOTE ID is coming in the colum Document like Quote_SV0319.00-Service_BMS_1_10-14-2025.xlsx so we need to extract the Quote ID too, at the end needs to be something like Quote_SV0319.00
