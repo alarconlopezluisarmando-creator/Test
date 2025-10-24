@@ -51,3 +51,9 @@
         else:
             print("Error: The required 'Review History' column was not found in the report.")
             return
+
+
+An error occurred during file processing: unconverted data remains when parsing with format "%b-%d-%y %I:%M %p": "  Ernie Sanders", at position 0. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
