@@ -3,6 +3,7 @@ import os
 import re
 import pandas as pd
 from datetime import datetime
+import glob
 
 # Define the expected extension for the Excel file
 EXCEL_EXTENSION = '.xlsx' 
@@ -38,12 +39,12 @@ def get_latest_remote_file(sftp, remote_file_path, file_prefix):
     The date pattern is now dynamically selected based on the file prefix.
     """
     
-    # 🎯 FIX 1: Dynamic Date Pattern Selection
+    # FIX 1: Dynamic Date Pattern Selection
     if 'Telamon_report_' in file_prefix:
         # Format: Telamon_report_YYYYMMDDHHMM_xxxx.xlsx
         DATE_PATTERN = r'(\d{12})'
-    elif '44020_Daily_OV_Update' in file_prefix:
-        # Format: 44020_Daily_OV_Update-YYYY-MM-DD-HH-MM-SS
+    elif '44020 Daily OV Update-' in file_prefix:
+        # Format: 44020_Daily_OV_Update-YYYY-MM-DD-HH-MM-SS.xlsx
         DATE_PATTERN = r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})'
     else:
         # Default pattern if needed, but safer to raise an error or use one of the above
@@ -129,17 +130,17 @@ def download_and_process_files():
         # SFTP credentials
         host1 = '54.225.75.239'
         port1 = 22
-        username1 = 'xxx'
-        password1 = 'xxx'
+        username1 = 'sea2_es'
+        password1 = 'M5v3WV3ThaG9'
         remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
         file_prefix1 = 'Telamon_report_'
         
         host2 = '105.52.12.194'
         port2 = 1022
-        username2 = 'xxx'
-        password2 = 'xxx'
+        username2 = 'samrftool'
+        password2 = 'nyHOPokaG3SP'
         remote_file_path2 = '/var/data/Support_Data/quickbase/Telamon'
-        file_prefix2 = '44020_Daily_OV_Update'
+        file_prefix2 = '44020 Daily OV Update-'
 
         # Download files (uses the function with dynamic date pattern)
         tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
@@ -152,15 +153,46 @@ def download_and_process_files():
     except Exception as e:
         print(f"An error occurred during file processing: {e}")
 
+def read_excel_file(path):
+    file_pattern = '44020 Daily OV Update*.xlsx'
+    files = glob.glob(os.path.join(path, file_pattern))
+
+    if not files:
+        raise FileNotFoundError(f"No files found matching pattern '{file_pattern}' in directory '{path}'")
+
+    most_recent_file = max(files, key=os.path.getmtime)
+
+    excel_file = pd.read_excel(most_recent_file, header=None)
+
+    # Find the row that starts with 'Project ID'
+    header_row = excel_file[excel_file.eq('Project ID').any(axis=1)].index[0]
+
+    # Create the DataFrame, skipping the rows before the header row
+    df = excel_file.iloc[header_row:].reset_index(drop=True)
+
+    # Set the first row as the header
+    df.columns = df.iloc[0]
+    df = df.iloc[1:].reset_index(drop=True)
+
+    # Drop any columns that are entirely empty
+    df = df.loc[:, df.notnull().any(axis=0)]
+
+    # Also drop columns that have empty strings or whitespace strings
+    df = df.loc[:, ~(df.applymap(lambda x: str(x).strip()).eq('')).all()]
+
+    # Reset the index
+    df = df.reset_index(drop=True)
+
+    return df
+
 def process_files(quotes_file_path, tracker_file_path, network_path):
     # Read the files
     telamon_df = pd.read_excel(tracker_file_path) 
     
-    # Using header=10 and usecols="A:XFD" to capture the 'Project ID' header in the 11th row (0-indexed).
-    daily_update_df = pd.read_excel(quotes_file_path, header=10, usecols="A:XFD")
+    daily_update_df = read_excel_file(os.path.dirname(quotes_file_path))
 
     if daily_update_df.empty:
-        print("⚠️ WARNING: The '44020_Daily_OV_Update' file is still coming empty. Please verify the actual row number of 'Project ID' in the Excel file.")
+        print(" WARNING: The '44020_Daily_OV_Update' file is still coming empty. Please verify the actual row number of 'Project ID' in the Excel file.")
 
     # Merge the DataFrames
     merged_df = pd.merge(telamon_df, daily_update_df, 
@@ -210,8 +242,8 @@ def process_files(quotes_file_path, tracker_file_path, network_path):
     # Upload file to SFTP
     sftp_host = '54.225.75.239'
     sftp_port = 22
-    sftp_username = 'xxx'
-    sftp_password = 'xxx'
+    sftp_username = 'sea2_es'
+    sftp_password = 'M5v3WV3ThaG9'
     sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
     upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
 
