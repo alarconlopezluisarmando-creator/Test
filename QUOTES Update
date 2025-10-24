@@ -1,55 +1,7 @@
-# Assuming EXCEL_EXTENSION = '.xlsx' is defined globally
+I have this portion of code, but I need to do the same for the file Quotes_Summary_ with the coloumn Review History, 
 
-def get_latest_file(sftp, remote_file_path, file_prefix):
-    """
-    Gets the latest file from the SFTP server based on file prefix and dynamic date pattern/extension.
-    """
-    
-    # 🎯 FIX 1: Determine the required extension
-    if 'Quotes_Summary_' in file_prefix:
-        REQUIRED_EXTENSION = '.csv'
-        # Format: Quotes_Summary_YYYY-MM-DD-HH-MM-SS.csv (Adjust pattern if needed)
-        DATE_PATTERN = r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})'
-        use_timestamp_fallback = True
-    elif 'Telamon_report_' in file_prefix:
-        REQUIRED_EXTENSION = EXCEL_EXTENSION  # Uses the global '.xlsx'
-        # Format: Telamon_report_YYYYMMDDHHMM_xxxx.xlsx
-        DATE_PATTERN = r'(\d{12})'
-        use_timestamp_fallback = True 
-    else:
-        REQUIRED_EXTENSION = EXCEL_EXTENSION
-        DATE_PATTERN = None 
-        use_timestamp_fallback = True
+could you help me to update this portionl.
 
-    files = sftp.listdir(remote_file_path)
-    target_files = []
-
-    for file in files:
-        # 🎯 FIX 2: Check against the REQUIRED_EXTENSION
-        if file.startswith(file_prefix) and file.lower().endswith(REQUIRED_EXTENSION):
-            
-            # --- Try sorting by Regex Timestamp first ---
-            if DATE_PATTERN:
-                match = re.search(DATE_PATTERN, file)
-                if match:
-                    target_files.append((file, match.group(1), None))
-                    continue
-            
-            # --- Fallback: Sort by modification time (st_mtime) ---
-            if use_timestamp_fallback:
-                try:
-                    file_stat = sftp.stat(os.path.join(remote_file_path, file))
-                    target_files.append((file, None, file_stat.st_mtime))
-                except Exception as e:
-                    print(f"Could not stat file {file}: {e}")
-                    continue
-
-    if not target_files:
-        # 🎯 FIX 3: Update error message to show correct extension
-        print(f"No files found matching prefix '{file_prefix}' and extension '{REQUIRED_EXTENSION}' in '{remote_file_path}'.")
-        return None
-    
-    # ... (Sort logic remains the same)
-    target_files.sort(key=lambda x: (x[1] if x[1] is not None else '', x[2] if x[2] is not None else 0), reverse=True)
-    
-    return target_files[0][0]
+# Remove duplicates and keep the latest based on QT_QB_REVIEW_HISTORY
+df_diff = df_diff.sort_values(by=['QT:Quote ID_quotes', 'QT:QB - Review History'], ascending=[True, False])
+df_diff = df_diff.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
