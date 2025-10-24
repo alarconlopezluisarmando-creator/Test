@@ -1,3 +1,23 @@
---- Starting comparison between: Quotes_Report_2025-10-24_10-33-28.csv and Quote_Tracker_Data_202510240801_57765.xlsx ---
---- DF_TRACKER COLUMNS --- ['P:Project ID', 'QT:Root Cell ID', 'QT:SPMS Site ID', 'QT:Site Name', 'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Doc Review Status Text', 'QT:QB - Submittal Date', 'QT:QB - Date Approved', 'QT:QB - Rejection Notes', 'QT:QB - Review History']
-An error occurred during file processing: Index(['QT:Quote ID_quotes'], dtype='object')
+# ====================================================================
+# === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
+# ====================================================================
+if not df_diff.empty:
+    df_output = df_diff[[
+        # *** FIX: Use the full prefix column name generated during the merge ***
+        'Full_Quote_ID_Prefix_quotes', 
+        'Submittal Date',
+        'Document Type - RAN',
+        # ... rest of the columns ...
+    ]].rename(columns={
+        # *** FIX: Rename the full prefix column for the final output ***
+        'Full_Quote_ID_Prefix_quotes': 'QUOTE_TRACKER_XITOR_KEY',
+        'Submittal Date': 'QT_SUBMITTAL_DATE',
+        'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
+        'Review History': 'QT_QB__REVIEW_HISTORY',
+        'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+        'Date Approved': 'QT_QB__DATE_APPROVED',
+        'Rejection Notes': 'QT_QB__REJECTION_NOTES',
+        'Redline Notes': 'QT_QB_RED_LINE_NOTES'
+    })
+    
+    # ... rest of the output logic
