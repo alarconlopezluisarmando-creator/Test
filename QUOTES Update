@@ -1,2 +1,18 @@
---- Starting comparison between: Quotes_Report_2025-10-24_10-33-28.csv and Quote_Tracker_Data_202510240801_57765.xlsx ---
-An error occurred during file processing: ufunc 'add' did not contain a loop with signature matching types (dtype('int64'), dtype('<U1')) -> None
+    # ... (After cleaning df_quotes['Site #'] and df_quotes['QT:Quote ID']) ...
+
+    # --- CRITICAL FIX: Create Composite Merge Key ---
+    # Ensure all components are explicitly cast to string for concatenation to avoid the ufunc 'add' error
+    df_quotes['MERGE_KEY'] = (
+        df_quotes['Site #'].astype(str) + 
+        '_' + 
+        df_quotes['QT:Quote ID'].astype(str)
+    )
+    
+    # Repeat the same explicit cast for the tracker file
+    df_tracker['MERGE_KEY'] = (
+        df_tracker['Site #'].astype(str) + 
+        '_' + 
+        df_tracker['QT:Quote ID'].astype(str)
+    )
+
+    # ... (Rest of the code continues) ...
