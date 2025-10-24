@@ -39,7 +39,7 @@ def get_latest_remote_file(sftp, remote_file_path, file_prefix):
     The date pattern is now dynamically selected based on the file prefix.
     """
     
-    # FIX 1: Dynamic Date Pattern Selection
+    # Dynamic Date Pattern Selection
     if 'Telamon_report_' in file_prefix:
         # Format: Telamon_report_YYYYMMDDHHMM_xxxx.xlsx
         DATE_PATTERN = r'(\d{12})'
@@ -121,10 +121,130 @@ def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
     finally:
         close_sftp_connection(sftp, transport)
 
-# --- (The rest of your processing code uses the previous fix for the empty DataFrame) ---
+def read_excel_file(path):
+    file_pattern = '44020 Daily OV Update*.xlsx'
+    files = glob.glob(os.path.join(path, file_pattern))
+
+    if not files:
+        raise FileNotFoundError(f"No files found matching pattern '{file_pattern}' in directory '{path}'")
+
+    most_recent_file = max(files, key=os.path.getmtime)
+
+    # --- UPDATED LOGIC TO FIX HEADER AND STARTING COLUMN ---
+    try:
+        print(f"Reading file: {os.path.basename(most_recent_file)} with custom settings (skip 11 rows, use cols B:).")
+        df = pd.read_excel(
+            most_recent_file, 
+            # Row 12 in Excel is index 11
+            skiprows=11, 
+            # The first row after skipping (Row 12) is the header
+            header=0, 
+            # Start reading from column B and include all subsequent columns
+            usecols="B:" 
+        )
+    except Exception as e:
+        print(f"Error reading Excel file with specific skiprows/usecols: {e}")
+        print("Falling back to empty DataFrame to prevent crash.")
+        # Return an empty DataFrame if the specific read fails
+        return pd.DataFrame()
+    # --- END UPDATED LOGIC ---
+
+    # Standard clean-up (removed the old manual header finding/slicing)
+    
+    # Drop any columns that are entirely empty
+    df = df.loc[:, df.notnull().any(axis=0)]
+
+    # Also drop columns that have empty strings or whitespace strings
+    # Ensure all columns are strings for .applymap and .eq
+    df = df.astype(str).loc[:, ~(df.applymap(lambda x: x.strip()).eq('')).all()]
+
+    # Reset the index
+    df = df.reset_index(drop=True)
+
+    # Check for the key column name
+    if 'Other 1 - Site Number' not in df.columns:
+        print("WARNING: 'Other 1 - Site Number' column not found in the processed 44020 file. Merge will likely fail.")
+        
+    return df
+
+def process_files(quotes_file_path, tracker_file_path, network_path):
+    # Read the files
+    telamon_df = pd.read_excel(tracker_file_path) 
+    
+    # The read_excel_file is now more robust
+    daily_update_df = read_excel_file(os.path.dirname(quotes_file_path))
+
+    if daily_update_df.empty:
+        print(" WARNING: The '44020_Daily_OV_Update' file returned an empty DataFrame. Check if the header is still on row 12 and starts at column B.")
+        return # Stop processing if file is empty
+
+    # Merge the DataFrames
+    merged_df = pd.merge(telamon_df, daily_update_df, 
+                         left_on='P:Viaero Root ID', 
+                         right_on='Other 1 - Site Number', 
+                         suffixes=('_telamon', '_daily_update'), 
+                         how='outer')
+
+    # Identify differences
+    diff_df = pd.DataFrame()
+    
+    # Use a set to track columns already added to avoid duplicates in the difference check
+    columns_to_check = set(telamon_df.columns) & set(daily_update_df.columns)
+    
+    for column in columns_to_check:
+        if column != 'P:Viaero Root ID':
+            telamon_col = f'{column}_telamon'
+            daily_col = f'{column}_daily_update'
+            
+            # The merge suffixes handle column name conflicts
+            if telamon_col in merged_df.columns and daily_col in merged_df.columns:
+                temp_df = merged_df[
+                    merged_df[telamon_col].astype(str).fillna('').str.strip() != 
+                    merged_df[daily_col].astype(str).fillna('').str.strip()
+                ]
+                diff_df = pd.concat([diff_df, temp_df])
+                
+    diff_df = diff_df.drop_duplicates(subset=['P:Viaero Root ID', 'Other 1 - Site Number']).copy() # Use a stable subset for dropping duplicates
+
+    # Create output DataFrame
+    output_df = pd.DataFrame()
+    
+    # Safely get the 'Project ID' column, prioritizing the telamon one if it exists
+    output_df['Project ID'] = diff_df.get('Project ID_telamon', diff_df.get('Project ID_daily_update', diff_df.get('Project ID', '')))
+    
+    output_df['Workplan Name'] = 'Viaero_Workplan'
+
+    # Map Project ID
+    output_df['Mapped Project ID'] = output_df['Project ID'].astype(str).apply(lambda x: x.replace('V:(F', 'PF').replace('V:(A', 'AF'))
+
+    # Add other columns from Telamon_report_ file
+    for column in telamon_df.columns:
+        telamon_col = column if column == 'Project ID' else f'{column}_telamon'
+        
+        # Prioritize the Telamon value (left side of outer merge)
+        if telamon_col in diff_df.columns:
+            output_df[column] = diff_df[telamon_col]
+        
+    # Final cleanup before saving
+    output_df = output_df.dropna(how='all', subset=output_df.columns.difference(['Workplan Name'])).reset_index(drop=True)
+
+    # Save output file
+    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv' # Added H:M:S for uniqueness
+    output_path = os.path.join(network_path, output_file_name)
+    output_df.to_csv(output_path, index=False)
+    print(f"Output file saved successfully: {output_path}")
+
+    # Upload file to SFTP
+    sftp_host = '54.225.75.239'
+    sftp_port = 22
+    sftp_username = 'sea2_es'
+    sftp_password = 'M5v3WV3ThaG9'
+    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
+    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
 
 def download_and_process_files():
     try:
+        # NOTE: Verify this path is correct and accessible
         network_path = r'C:\Users\l5.lopez\Downloads\00_to delete'
         
         # SFTP credentials
@@ -142,7 +262,7 @@ def download_and_process_files():
         remote_file_path2 = '/var/data/Support_Data/quickbase/Telamon'
         file_prefix2 = '44020 Daily OV Update-'
 
-        # Download files (uses the function with dynamic date pattern)
+        # Download files
         tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
         quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
 
@@ -153,98 +273,5 @@ def download_and_process_files():
     except Exception as e:
         print(f"An error occurred during file processing: {e}")
 
-def read_excel_file(path):
-    file_pattern = '44020 Daily OV Update*.xlsx'
-    files = glob.glob(os.path.join(path, file_pattern))
-
-    if not files:
-        raise FileNotFoundError(f"No files found matching pattern '{file_pattern}' in directory '{path}'")
-
-    most_recent_file = max(files, key=os.path.getmtime)
-
-    excel_file = pd.read_excel(most_recent_file, header=None)
-
-    # Find the row that starts with 'Project ID'
-    header_row = excel_file[excel_file.eq('Project ID').any(axis=1)].index[0]
-
-    # Create the DataFrame, skipping the rows before the header row
-    df = excel_file.iloc[header_row:].reset_index(drop=True)
-
-    # Set the first row as the header
-    df.columns = df.iloc[0]
-    df = df.iloc[1:].reset_index(drop=True)
-
-    # Drop any columns that are entirely empty
-    df = df.loc[:, df.notnull().any(axis=0)]
-
-    # Also drop columns that have empty strings or whitespace strings
-    df = df.loc[:, ~(df.applymap(lambda x: str(x).strip()).eq('')).all()]
-
-    # Reset the index
-    df = df.reset_index(drop=True)
-
-    return df
-
-def process_files(quotes_file_path, tracker_file_path, network_path):
-    # Read the files
-    telamon_df = pd.read_excel(tracker_file_path) 
-    
-    daily_update_df = read_excel_file(os.path.dirname(quotes_file_path))
-
-    if daily_update_df.empty:
-        print(" WARNING: The '44020_Daily_OV_Update' file is still coming empty. Please verify the actual row number of 'Project ID' in the Excel file.")
-
-    # Merge the DataFrames
-    merged_df = pd.merge(telamon_df, daily_update_df, 
-                         left_on='P:Viaero Root ID', 
-                         right_on='Other 1 - Site Number', 
-                         suffixes=('_telamon', '_daily_update'), 
-                         how='outer')
-
-    # Identify differences
-    diff_df = pd.DataFrame()
-    for column in telamon_df.columns:
-        if column != 'P:Viaero Root ID':
-            telamon_col = f'{column}_telamon'
-            daily_col = f'{column}_daily_update'
-            
-            if telamon_col in merged_df.columns and daily_col in merged_df.columns:
-                temp_df = merged_df[
-                    merged_df[telamon_col].astype(str).fillna('') != 
-                    merged_df[daily_col].astype(str).fillna('')
-                ]
-                diff_df = pd.concat([diff_df, temp_df])
-    diff_df = diff_df.drop_duplicates()
-
-    # Create output DataFrame
-    output_df = pd.DataFrame()
-    output_df['Project ID'] = diff_df['Project ID']
-    output_df['Workplan Name'] = 'Viaero_Workplan'
-
-    # Map Project ID
-    output_df['Mapped Project ID'] = output_df['Project ID'].apply(lambda x: str(x).replace('V:(F', 'PF').replace('V:(A', 'AF'))
-
-    # Add other columns from Telamon_report_ file
-    for column in telamon_df.columns:
-        telamon_col = column if column == 'Project ID' else f'{column}_telamon'
-        
-        if telamon_col in diff_df.columns:
-            output_df[column] = diff_df[telamon_col]
-        elif column in diff_df.columns:
-            output_df[column] = diff_df[column]
-
-
-    # Save output file
-    output_file_name = f'TELAMON_IMPORT_{datetime.now().strftime("%Y%m%d")}.csv'
-    output_path = os.path.join(network_path, output_file_name)
-    output_df.to_csv(output_path, index=False)
-
-    # Upload file to SFTP
-    sftp_host = '54.225.75.239'
-    sftp_port = 22
-    sftp_username = 'sea2_es'
-    sftp_password = 'M5v3WV3ThaG9'
-    sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Telamon Reports/'
-    upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
-
+# Execute the main function
 download_and_process_files()
