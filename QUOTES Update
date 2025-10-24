@@ -1,1 +1,4 @@
-An error occurred during file processing: 'QT:Quote ID'
+df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+print("--- DF_TRACKER COLUMNS ---", df_tracker.columns.tolist()) # <--- ADD THIS LINE
+# The next line cleans columns, so the error happens after this, but check the raw list.
+df_tracker.columns = df_tracker.columns.str.strip() 
