@@ -112,8 +112,8 @@ def upload_file_to_sftp(file_path, host, port, username, password, remote_path):
 
 def read_excel_file(path):
     """
-    Reads the '44020 Daily OV Update' file, applying fixes for row/column offset 
-    and cleaning column names.
+    Reads the '44020 Daily OV Update' file, applying robust fixes for row/column offset 
+    and cleaning column names/data to prevent indexing errors.
     """
     file_pattern = '44020 Daily OV Update*.xlsx'
     files = glob.glob(os.path.join(path, file_pattern))
@@ -137,27 +137,25 @@ def read_excel_file(path):
         print(f"FATAL ERROR reading Excel file {os.path.basename(most_recent_file)} with custom parameters: {e}")
         return pd.DataFrame()
     
-    # --- Column Name Cleaning ---
-    # Convert names to string, strip whitespace
+    # --- Column Name Cleaning and Filtering (MOST ROBUST) ---
+    
+    # 1. Convert names to string, strip whitespace
     df.columns = df.columns.astype(str).str.strip() 
     
-    # Remove columns that became 'nan' or 'None' after stripping
-    df = df.loc[:, ~df.columns.isin(['nan', 'None'])]
-    # ----------------------------
+    # 2. Filter out columns whose NAMES are empty, 'nan', or 'None'
+    #    Uses list indexing which is robust against the 'multidimensional key' error.
+    valid_cols = [col for col in df.columns if col and col.lower() not in ('nan', 'none')]
+    df = df[valid_cols]
     
-    # --- FIX for 'Cannot index with multidimensional key' ERROR ---
-    
-    # 1. Drop any columns that are entirely NaN (empty)
+    # 3. Drop columns where ALL DATA is empty/NaN
     df = df.dropna(axis=1, how='all')
 
-    # 2. Drop columns that have only empty strings or whitespace strings.
-    #    This uses a simple boolean mask indexer.
+    # 4. Drop columns where ALL DATA is whitespace/empty string.
+    #    This uses a simple Boolean mask on the pre-cleaned DataFrame.
     mask_only_whitespace = df.astype(str).apply(lambda col: col.str.strip().eq('').all())
-    
-    # Keep only the columns where the mask is False (i.e., columns NOT containing only whitespace)
     df = df.loc[:, ~mask_only_whitespace]
     
-    # --- END FIX ---
+    # --- End Robust Method ---
 
     # Reset the index
     df = df.reset_index(drop=True)
@@ -242,7 +240,9 @@ def download_and_process_files():
         network_path = r'C:\Users\l5.lopez\Downloads\00_to delete' 
         
         # --- LOCAL OVERRIDE FOR 44020 FILE ---
+        # The script will look for '44020 Daily OV Update*.xlsx' in this folder
         local_44020_folder = network_path 
+        # quotes_file_path is a placeholder to pass the folder path to process_files
         quotes_file_path = os.path.join(local_44020_folder, '44020 Daily OV Update-LOCAL_READ.xlsx')
         
         print("\n*** LOCAL OVERRIDE: Reading '44020 Daily OV Update-' from the local folder. ***")
@@ -269,4 +269,3 @@ def download_and_process_files():
 
 # Execute the main function
 download_and_process_files()
-
