@@ -1,18 +1,1 @@
-    # ... (After cleaning df_quotes['Site #'] and df_quotes['QT:Quote ID']) ...
-
-    # --- CRITICAL FIX: Create Composite Merge Key ---
-    # Ensure all components are explicitly cast to string for concatenation to avoid the ufunc 'add' error
-    df_quotes['MERGE_KEY'] = (
-        df_quotes['Site #'].astype(str) + 
-        '_' + 
-        df_quotes['QT:Quote ID'].astype(str)
-    )
-    
-    # Repeat the same explicit cast for the tracker file
-    df_tracker['MERGE_KEY'] = (
-        df_tracker['Site #'].astype(str) + 
-        '_' + 
-        df_tracker['QT:Quote ID'].astype(str)
-    )
-
-    # ... (Rest of the code continues) ...
+An error occurred during file processing: 'QT:Quote ID'
