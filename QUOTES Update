@@ -8,6 +8,8 @@ if 'QT:Root Cell ID' in df_tracker.columns:
     df_tracker['Site #'] = df_tracker['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
 else:
     print("Error: The required 'QT:Root Cell ID' was not found in the Tracker file.")
+
+
     return
 
 # --- FIX APPLIED HERE ---
