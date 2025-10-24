@@ -1,0 +1,250 @@
+I have two files, 
+
+"Telamon_report_" and "44020 Daily OV Update" both report has almost the same columns.  
+
+I need to concatenate all columns, using the Project ID like a key, we need to check if some of them are different, 
+If one column is different, we need to create a output file with the data that is coming for the file Telamon_report_ and 44020, only the projecti ID is coming from the file named Telamon_report, you need to a vloopup between the Rood ID and Other 1 - Site Number to get the Project ID. 
+do a mapping like is coming. Please After Project ID column, please add a new column named "Workplan Name" and the value is need to be "Viaero_Workplan" always.  
+
+Project ID		Project ID
+V:(F 1115) Site Audit Walk Completion-Finish		PF1115
+V:(A 1115) Site Audit Walk Completion-Finish		AF1115
+V:(F 1120) Site Audit Walk Package Received-Finish		PF1120
+V:(A 1120) Site Audit Walk Package Received-Finish		AF1120
+V:(F 1135) Ground Lease Exhibit Received-Finish		PF1135
+V:(A 1135) Ground Lease Exhibit Received-Finish		AF1135
+V:(F 1125) Ground Cabling BOM Received-Finish		PF1125
+V:(A 1125) Ground Cabling BOM Received-Finish		AF1125
+V:(F 1285) Mount Analysis Received-Finish		PF1285
+V:(A 1285) Mount Analysis Received-Finish		AF1285
+V:(F 1292) MMOD Received-Finish		PF1292
+V:(A 1292) MMOD Received-Finish		AF1292
+V:(F 1142) 90% Construction Drawing Received-Finish		PF1142
+V:(A 1142) 90% Construction Drawing Received-Finish		AF1142
+V:(F 1127) Tower Cabling BOM Received-Finish		PF1127
+V:(A 1127) Tower Cabling BOM Received-Finish		AF1127
+V:(F 1281) Structural Received-Finish		PF1281
+V:(A 1281) Structural Received-Finish		AF1281
+V:(F 1146) 100% Construction Drawing Received-Finish		PF1146
+V:(A 1146) 100% Construction Drawing Received-Finish		AF1146
+V:(F 1143) Rework- 90% Construction Drawing Received-Finish		PF1143
+V:(A 1143) Rework- 90% Construction Drawing Received-Finish		AF1143
+
+Save the file like TELAMON_IMPORT_yyyymmdd and file need to be updated in : 
+
+        sftp_host = '54.225.75.239'
+        sftp_port = 22
+        sftp_username = 'xxx'
+        sftp_password = 'xxx'
+        sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/E911/'
+        upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+
+I need that a single code with the code that is above, plus the def read_excel_file and the logic that I have requested before.
+
+def read_excel_file(path, file_pattern):
+
+    files = glob.glob(os.path.join(path, file_pattern))
+
+    if not files:
+        raise FileNotFoundError(f"No files found matching pattern '{file_pattern}' in directory '{path}'")
+
+    most_recent_file = max(files, key=os.path.getmtime)
+
+    excel_file = pd.read_excel(most_recent_file, header=None)
+
+    # Find the row that starts with 'Project ID'
+    header_row = excel_file[excel_file.eq('Project ID').any(axis=1)].index[0]
+
+    # Create the DataFrame, skipping the rows before the header row
+    df = excel_file.iloc[header_row:].reset_index(drop=True)
+
+    # Set the first row as the header
+    df.columns = df.iloc[0]
+    df = df.iloc[1:].reset_index(drop=True)
+
+    # Drop any columns that are entirely empty
+    df = df.loc[:, df.notnull().any(axis=0)]
+
+    # Also drop columns that have empty strings or whitespace strings
+    df = df.loc[:, ~(df.applymap(lambda x: str(x).strip()).eq('')).all()]
+
+    # Reset the index
+    df = df.reset_index(drop=True)
+
+    return df
+
+# Example usage
+path = '/var/data/Support_Data/quickbase/Telamon'
+file_pattern = '44020 Daily OV Update*.xlsx'
+
+try:
+    df = read_excel_file(path, file_pattern)
+    print(df.head())
+except FileNotFoundError as e:
+    print(e)
+
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+import os
+import glob
+import pandas as pd
+import pendulum
+import pyodbc
+import numpy as np
+import subprocess
+from airflow.operators.bash import BashOperator
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+import re
+import pytz
+from datetime import datetime
+import paramiko
+import papermill as pm
+from papermill import PapermillExecutionError
+
+
+
+local_tz=pendulum.timezone("America/Chicago") # Central Time (CT)
+
+default_args = {
+    'owner': 'j.ferdous1',
+    'start_date': datetime(2025, 10, 6),
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+    'viaero_OV_ETL_final_rfds_upload',
+    default_args=default_args,
+    schedule_interval='20 8,10 * * *',  # run time
+    catchup=False,
+)
+
+
+def read_latest_rfds_status(**kwargs):
+    host = '105.52.12.194'
+    port = 1022
+    username = 'samrftool'
+    password = 'nyHOPokaG3SP'
+
+    remote_folder = '/var/data/Support_Data/quickbase/RFDS_status'
+    local_folder = '/home/airflow/processed/quickbase/RFDS_status'
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(host, port=port, username=username, password=password)
+    sftp = ssh.open_sftp()
+
+    files = sftp.listdir(remote_folder)
+    latest_file = max(files)
+    remote_file_path = os.path.join(remote_folder, latest_file)
+    local_file_path = os.path.join(local_folder, latest_file)
+    sftp.get(remote_file_path, local_file_path)
+
+    sftp.close()
+    ssh.close()
+
+    kwargs['ti'].xcom_push(key='rfds_status_path', value=local_file_path)
+
+
+def download_file_from_sftp(**kwargs):
+    ti = kwargs['ti']
+    rfds_status_path = ti.xcom_pull(key='rfds_status_path')
+
+    host = 'ftp.onevizion.com'
+    username = 'sea2_es'
+    password = 'M5v3WV3ThaG9'
+
+    remote_file_path = '/home/samsung_sea2/rfds/Inbound/Archive'
+    approved_status_path = '/home/airflow/processed/quickbase/RFDS_status'
+
+    local_dir = '/home/airflow/processed/quickbase/viero_approved_rfds'
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(host, username=username, password=password)
+    sftp = ssh.open_sftp()
+
+    files = os.listdir(approved_status_path)
+    latest_file = max(files, key=lambda x: os.path.getctime(os.path.join(approved_status_path, x)))
+    latest_file_path = os.path.join(approved_status_path, latest_file)
+
+    df = pd.read_csv(latest_file_path)
+    approved_files = df[df['RFDS Review Status Text'] == 'Approved']
+
+    status_file_path = os.path.join(local_dir, 'RFDS_status.xlsx')
+
+    downloaded_files = []
+    for index, row in approved_files.iterrows():
+        file = row['RFDS']
+        remote_file_path_with_name = os.path.join(remote_file_path, file)
+        filename, file_extension = os.path.splitext(file)
+        new_filename = filename.replace('RFDS', 'RFDS-APPROVED') + file_extension
+        local_file_path = os.path.join(local_dir, new_filename)
+        if not os.path.exists(local_file_path):
+            try:
+                sftp.get(remote_file_path_with_name, local_file_path)
+                approved_files.loc[index, 'Download Status'] = 'Downloaded'
+                downloaded_files.append(new_filename)
+            except Exception as e:
+                approved_files.loc[index, 'Download Status'] = 'Failed'
+                print(f"Failed to download {file}: {e}")
+        else:
+            approved_files.loc[index, 'Download Status'] = 'Already Exist'
+
+    approved_files.to_excel(status_file_path, index=False)
+
+    sftp.close()
+    ssh.close()
+
+    kwargs['ti'].xcom_push(key='downloaded_files', value=downloaded_files)
+
+
+def upload_pdf_files_ssh(**kwargs):
+    ti = kwargs['ti']
+    downloaded_files = ti.xcom_pull(key='downloaded_files')
+
+    hostname = '54.225.75.239'
+    username = 'sea2_es'
+    password = 'M5v3WV3ThaG9'
+    local_path = '/home/airflow/processed/quickbase/viero_approved_rfds'
+    remote_path = '/home/samsung_sea2/rfds/Inbound/'
+
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh_client.connect(hostname=hostname, username=username, password=password)
+    sftp_client = ssh_client.open_sftp()
+
+    for filename in downloaded_files:
+        if filename.endswith(".pdf"):
+            local_file_path = os.path.join(local_path, filename)
+            remote_file_path = os.path.join(remote_path, filename)
+            sftp_client.put(local_file_path, remote_file_path)
+            print(f"File uploaded successfully to {remote_file_path}")
+
+    sftp_client.close()
+    ssh_client.close()
+
+
+read_latest_rfds_status_task = PythonOperator(
+    task_id='read_latest_rfds_status',
+    python_callable=read_latest_rfds_status,
+    dag=dag,
+)
+
+download_file_from_sftp_task = PythonOperator(
+    task_id='download_file_from_sftp',
+    python_callable=download_file_from_sftp,
+    dag=dag,
+)
+
+upload_pdf_files_ssh_task = PythonOperator(
+    task_id='upload_pdf_files_ssh',
+    python_callable=upload_pdf_files_ssh,
+    dag=dag,
+)
+
+
+read_latest_rfds_status_task >> download_file_from_sftp_task >> upload_pdf_files_ssh_task
