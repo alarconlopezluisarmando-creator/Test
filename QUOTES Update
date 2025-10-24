@@ -1,8 +1,3 @@
-# Rename this to avoid the merge conflict with the 'QT:Quote ID' column
-df_quotes['Full_Quote_ID_Prefix'] = df_quotes['Document'].str.split('-', n=1).str[0]
-
-
-# Sort using the new column name
-df_quotes = df_quotes.sort_values(by=['Full_Quote_ID_Prefix', 'Review History'], ascending=[True, False])
-# Drop duplicates using the new column name
-df_quotes = df_quotes.drop_duplicates(subset='Full_Quote_ID_Prefix', keep='first')
+--- Starting comparison between: Quotes_Report_2025-10-24_10-33-28.csv and Quote_Tracker_Data_202510240801_57765.xlsx ---
+--- DF_TRACKER COLUMNS --- ['P:Project ID', 'QT:Root Cell ID', 'QT:SPMS Site ID', 'QT:Site Name', 'QT:Quote ID', 'QT:QB - Document Type', 'QT:QB - Doc Review Status Text', 'QT:QB - Submittal Date', 'QT:QB - Date Approved', 'QT:QB - Rejection Notes', 'QT:QB - Review History']
+An error occurred during file processing: Index(['QT:Quote ID_quotes'], dtype='object')
