@@ -137,22 +137,27 @@ def read_excel_file(path):
         print(f"FATAL ERROR reading Excel file {os.path.basename(most_recent_file)} with custom parameters: {e}")
         return pd.DataFrame()
     
-    # --- FIX: Clean Column Names ---
-    # Convert names to string, strip whitespace, and replace any None/NaN keys
+    # --- Column Name Cleaning ---
+    # Convert names to string, strip whitespace
     df.columns = df.columns.astype(str).str.strip() 
     
     # Remove columns that became 'nan' or 'None' after stripping
     df = df.loc[:, ~df.columns.isin(['nan', 'None'])]
-    # -------------------------------
+    # ----------------------------
     
-    # Standard clean-up 
+    # --- FIX for 'Cannot index with multidimensional key' ERROR ---
     
-    # Drop any columns that are entirely empty
-    df = df.loc[:, df.notnull().any(axis=0)]
+    # 1. Drop any columns that are entirely NaN (empty)
+    df = df.dropna(axis=1, how='all')
 
-    # Drop columns that have only empty strings or whitespace strings
-    df_temp = df.astype(str)
-    df = df.loc[:, ~df_temp.apply(lambda col: col.str.strip().eq('').all())]
+    # 2. Drop columns that have only empty strings or whitespace strings.
+    #    This uses a simple boolean mask indexer.
+    mask_only_whitespace = df.astype(str).apply(lambda col: col.str.strip().eq('').all())
+    
+    # Keep only the columns where the mask is False (i.e., columns NOT containing only whitespace)
+    df = df.loc[:, ~mask_only_whitespace]
+    
+    # --- END FIX ---
 
     # Reset the index
     df = df.reset_index(drop=True)
@@ -160,7 +165,6 @@ def read_excel_file(path):
     # Sanity check for the merge key
     if 'Other 1 - Site Number' not in df.columns:
         print(f"FINAL WARNING: 'Other 1 - Site Number' column not found after cleaning. Columns found: {df.columns.tolist()}")
-        # Check if the DataFrame is empty (the primary cause for the ABORT)
         if df.empty:
             print("CRITICAL: DataFrame is empty. Check the data in the Excel file.")
             
