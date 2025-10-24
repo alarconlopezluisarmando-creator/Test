@@ -1,1 +1,240 @@
-/home/airflow/airflow/reports
+import os
+import glob
+import pandas as pd
+from datetime import datetime
+import paramiko
+import numpy as np
+import warnings
+
+# Suppress common warnings from libraries like openpyxl
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# --- Configuration ---
+# Local path for saving the final report file
+LOCAL_OUTPUT_DIR = '/home/airflow/airflow/reports'
+
+# SFTP Upload Configuration
+SFTP_HOST = '54.225.75.239'
+SFTP_PORT = 22
+SFTP_USERNAME = 'xxx'  # Replace with actual username
+SFTP_PASSWORD = 'xxx'  # Replace with actual password
+SFTP_REMOTE_PATH = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/E911/'
+
+# Input path for source files
+REPORT_PATH = '/var/data/Support_Data/quickbase/Telamon'
+
+# --- Project ID Mapping Table ---
+PROJECT_ID_MAP = {
+    'V:(F 1115) Site Audit Walk Completion-Finish': 'PF1115',
+    'V:(A 1115) Site Audit Walk Completion-Finish': 'AF1115',
+    'V:(F 1120) Site Audit Walk Package Received-Finish': 'PF1120',
+    'V:(A 1120) Site Audit Walk Package Received-Finish': 'AF1120',
+    'V:(F 1135) Ground Lease Exhibit Received-Finish': 'PF1135',
+    'V:(A 1135) Ground Lease Exhibit Received-Finish': 'AF1135',
+    'V:(F 1125) Ground Cabling BOM Received-Finish': 'PF1125',
+    'V:(A 1125) Ground Cabling BOM Received-Finish': 'AF1125',
+    'V:(F 1285) Mount Analysis Received-Finish': 'PF1285',
+    'V:(A 1285) Mount Analysis Received-Finish': 'AF1285',
+    'V:(F 1292) MMOD Received-Finish': 'PF1292',
+    'V:(A 1292) MMOD Received-Finish': 'AF1292',
+    'V:(F 1142) 90% Construction Drawing Received-Finish': 'PF1142',
+    'V:(A 1142) 90% Construction Drawing Received-Finish': 'AF1142',
+    'V:(F 1127) Tower Cabling BOM Received-Finish': 'PF1127',
+    'V:(A 1127) Tower Cabling BOM Received-Finish': 'AF1127',
+    'V:(F 1281) Structural Received-Finish': 'PF1281',
+    'V:(A 1281) Structural Received-Finish': 'AF1281',
+    'V:(F 1146) 100% Construction Drawing Received-Finish': 'PF1146',
+    'V:(A 1146) 100% Construction Drawing Received-Finish': 'AF1146',
+    'V:(F 1143) Rework- 90% Construction Drawing Received-Finish': 'PF1143',
+    'V:(A 1143) Rework- 90% Construction Drawing Received-Finish': 'AF1143',
+}
+
+# --- Functions ---
+
+def upload_file_to_sftp(local_path, host, port, username, password, remote_path):
+    """Uploads a file to a remote SFTP server."""
+    try:
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        
+        remote_file_path = os.path.join(remote_path, os.path.basename(local_path))
+        print(f"Uploading {local_path} to {remote_file_path}...")
+        sftp.put(local_path, remote_file_path)
+        print(f"File uploaded successfully to {remote_file_path}")
+        
+        sftp.close()
+        transport.close()
+    except Exception as e:
+        print(f"SFTP upload failed: {e}")
+        # Re-raise the exception to signal a failure in the script
+        raise e
+
+
+def read_excel_file(path, file_pattern):
+    """
+    Reads the most recent Excel file matching the pattern, automatically 
+    detecting the header row starting with 'Project ID'.
+    """
+    files = glob.glob(os.path.join(path, file_pattern))
+
+    if not files:
+        raise FileNotFoundError(f"No files found matching pattern '{file_pattern}' in directory '{path}'")
+
+    most_recent_file = max(files, key=os.path.getmtime)
+    print(f"Reading file: {most_recent_file}")
+
+    excel_file = pd.read_excel(most_recent_file, header=None)
+
+    # Find the row that contains 'Project ID'
+    header_row_index = excel_file.apply(lambda row: row.astype(str).str.contains('Project ID').any(), axis=1).idxmax()
+
+    if excel_file.iloc[header_row_index].astype(str).str.contains('Project ID').any():
+        # Create the DataFrame, skipping the rows before the header row
+        df = excel_file.iloc[header_row_index:].reset_index(drop=True)
+
+        # Set the first row as the header
+        df.columns = df.iloc[0].astype(str).str.strip()
+        df = df.iloc[1:].reset_index(drop=True)
+
+        # Drop columns that are entirely NaN or entirely empty/whitespace strings
+        df = df.dropna(axis=1, how='all')
+        df = df.loc[:, ~(df.apply(lambda col: col.astype(str).str.strip().eq('').all()))]
+        
+        # Reset the index
+        df = df.reset_index(drop=True)
+
+        return df
+    else:
+        raise ValueError(f"Could not reliably find 'Project ID' header in file: {most_recent_file}")
+
+
+def process_and_upload_reports(base_path, output_dir):
+    """
+    Core function to read, process, compare, save, and upload the report files.
+    """
+    telamon_pattern = 'Telamon_report_*.xlsx'
+    daily_ov_pattern = '44020 Daily OV Update*.xlsx'
+    
+    # 1. Read files
+    try:
+        df_telamon = read_excel_file(base_path, telamon_pattern)
+        df_daily = read_excel_file(base_path, daily_ov_pattern)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Skipping processing: {e}")
+        return # Stop execution if files aren't found or header issue exists
+
+    # Ensure key columns exist and strip whitespace from values
+    key_cols_telamon = ['Root ID', 'Other 1 - Site Number', 'Project ID']
+    
+    if not all(col in df_telamon.columns for col in key_cols_telamon) or 'Project ID' not in df_daily.columns:
+        print("Required key columns are missing from one or both reports.")
+        return
+
+    # 2. Map Project ID in Telamon report
+    df_telamon['Lookup_Key'] = df_telamon['Project ID'].astype(str).str.strip()
+    
+    # Apply the VLOOKUP/Mapping logic
+    df_telamon['Mapped_Project ID'] = df_telamon['Lookup_Key'].map(PROJECT_ID_MAP).fillna(df_telamon['Lookup_Key'])
+
+    # Drop temporary key
+    df_telamon.drop(columns=['Lookup_Key'], inplace=True)
+    
+    # Standardize column names for merge and comparison
+    df_telamon.columns = [f'{col}_Telamon' if col != 'Mapped_Project ID' else col for col in df_telamon.columns]
+    df_daily.columns = [f'{col}_Daily' if col != 'Project ID' else col for col in df_daily.columns]
+
+    df_telamon.rename(columns={'Mapped_Project ID': 'Project ID'}, inplace=True)
+    df_daily.rename(columns={'Project ID': 'Project ID'}, inplace=True)
+
+    # 3. Merge the two dataframes on 'Project ID'
+    merged_df = pd.merge(df_telamon, df_daily, on='Project ID', how='outer')
+
+    # Identify common columns (excluding 'Project ID')
+    common_cols = sorted(list(set([col.replace('_Telamon', '').replace('_Daily', '') 
+                                 for col in merged_df.columns if col.endswith('_Telamon') or col.endswith('_Daily') and col != 'Project ID'])))
+    
+    # --- Comparison Logic ---
+    merged_df['Is_Different'] = False
+
+    def clean_value(x):
+        """Standardize various empty/missing representations to NaN/clean string for reliable comparison."""
+        s = str(x).strip()
+        if not s or s in ['nan', 'NaT']:
+            return np.nan
+        return s.upper() # Use upper() for case-insensitive comparison
+
+    for col in common_cols:
+        col_tel = f'{col}_Telamon'
+        col_daily = f'{col}_Daily'
+        
+        if col_tel in merged_df.columns and col_daily in merged_df.columns:
+            # Check for non-NaN differences
+            diff = merged_df.apply(lambda row: clean_value(row[col_tel]) != clean_value(row[col_daily]), axis=1, raw=False)
+            merged_df['Is_Different'] = merged_df['Is_Different'] | diff
+
+    # 4. Filter for rows where at least one column is different
+    output_df = merged_df[merged_df['Is_Different']].copy()
+    
+    if output_df.empty:
+        print("No differences found between the two reports. Skipping file creation and upload.")
+        return
+
+    # Select and reorder final columns for the output file
+    final_cols = ['Project ID']
+    
+    # Add Telamon and Daily columns side-by-side for the final output
+    for col in common_cols:
+        col_tel = f'{col}_Telamon'
+        col_daily = f'{col}_Daily'
+        if col_tel in output_df.columns:
+            final_cols.append(col_tel)
+        if col_daily in output_df.columns:
+            final_cols.append(col_daily)
+            
+    output_df = output_df.filter(items=final_cols, axis=1)
+
+    # 5. Add "Workplan Name" column after "Project ID"
+    output_df.insert(output_df.columns.get_loc('Project ID') + 1, "Workplan Name", "Viaero_Workplan")
+    
+    # Clean up column names for the final output (restore original names for clarity)
+    new_cols = []
+    for col in output_df.columns:
+        if col.endswith('_Telamon'):
+            new_cols.append(col.replace('_Telamon', ' (Telamon)'))
+        elif col.endswith('_Daily'):
+            new_cols.append(col.replace('_Daily', ' (44020 Daily OV Update)'))
+        else:
+            new_cols.append(col)
+    
+    output_df.columns = new_cols
+    
+    # 6. Save the file to the specified local directory
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    current_date = datetime.now().strftime('%Y%m%d')
+    output_filename = f'TELAMON_IMPORT_{current_date}.xlsx'
+    output_path = os.path.join(output_dir, output_filename)
+    
+    output_df.to_excel(output_path, index=False)
+    print(f"Output file created at: {output_path}")
+
+    # 7. Upload the file via SFTP
+    upload_file_to_sftp(
+        output_path, 
+        SFTP_HOST, 
+        SFTP_PORT, 
+        SFTP_USERNAME, 
+        SFTP_PASSWORD, 
+        SFTP_REMOTE_PATH
+    )
+    
+    # Optionally remove the local file after upload
+    # os.remove(output_path)
+    # print(f"Local file {output_path} removed.")
+
+# --- Execution Block ---
+if __name__ == "__main__":
+    process_and_upload_reports(REPORT_PATH, LOCAL_OUTPUT_DIR)
