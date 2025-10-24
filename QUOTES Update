@@ -1,67 +1,49 @@
 # Assuming QUOTE_ID_PATTERN is defined earlier in your actual script
-# For demonstration, let's assume a dummy pattern:
-# QUOTE_ID_PATTERN = r'(Q\d{6})' 
-
 # ... (Previous code for Site # and QT:Quote ID remains the same)
 
 # Process Quotes Report
-if 'Site #' in df_quotes.columns:
-    df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
-else:
-    print("Error: The required 'Site #' column was not found in the report.")
-    return
+# ... (Code for Site # and QT:Quote ID validation) ...
 
-if 'Document' in df_quotes.columns:
-    # Use str.extract with the regex pattern to reliably get only the core Quote ID
-    df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
-    
-    # Check if extraction was successful for any row
-    if df_quotes['QT:Quote ID'].eq('').all():
-         print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
-         return
-else:
-    print("Error: The required 'Document' column was not found in the report.")
-    return
-
-# --- FIX START: Correcting the Review History processing ---
+# --- FIX START: Correcting the Review History processing for maximum robustness ---
 
 if 'Review History' in df_quotes.columns:
-    # 1. Use a more precise regex to capture ONLY the date/time string inside the brackets.
-    # Pattern explanation: \[ and \] capture the literal brackets. (.*?) captures everything non-greedily inside.
-    DATE_REGEX = r'\[(\w{3}-\d{1,2}-\d{2} \d{1,2}:\d{2} [AP]M)\]'
+    # 1. Clean the entire column first to remove any unexpected leading/trailing whitespace
+    review_history_series = df_quotes['Review History'].astype(str).str.strip()
+    
+    # 2. Use a highly flexible regex to capture the date string.
+    # We'll allow spaces around the brackets and be non-greedy in capturing the date parts.
+    # Pattern explanation: Targets [3-letter month-1/2 digit day-2 digit year HH:MM AM/PM]
+    # It explicitly handles the spaces and colon, but is flexible on the single/double digit day/hour/minute.
+    DATE_REGEX = r'.*?\[\s*(\w{3}[-]\d{1,2}[-]\d{2}\s+\d{1,2}:\d{2}\s+[AP]M)\s*\].*'
 
     # Extract the DATE STRING (e.g., 'Nov-15-23 10:30 AM')
-    # .str.extract(..., expand=False) returns a Series containing only the group content.
-    date_string_series = df_quotes['Review History'].astype(str).str.extract(DATE_REGEX, expand=False)
+    # Use the 'str' accessor on the cleaned series.
+    date_string_series = review_history_series.str.extract(DATE_REGEX, expand=False).str.strip()
 
-    # 2. Convert the clean date string to datetime object using the specified format.
+    # 3. Convert the clean date string to a datetime object.
+    # We keep the original format as it matches the pattern.
     df_quotes['Review History DT'] = pd.to_datetime(
         date_string_series,
         format='%b-%d-%y %I:%M %p',
-        errors='coerce' # Set invalid parsing to NaT (Not a Time)
+        errors='coerce' # Set invalid parsing to NaT
     )
     
-    # Check for successful extraction/conversion before sorting
+    # Check for successful extraction/conversion
     if df_quotes['Review History DT'].isna().all():
-         print("Error: Failed to extract a valid date/time from the 'Review History' column.")
+         # Provide a specific warning if conversion fails completely
+         print("Error: Failed to extract a valid date/time from the 'Review History' column. Check the date format or the regex pattern.")
          return
 
-    # 3. Sort by datetime and drop duplicates (using the extracted 'QT:Quote ID' as the subset)
+    # 4. Sort by datetime and drop duplicates (using the extracted 'QT:Quote ID' as the subset)
     df_quotes = df_quotes.sort_values(by='Review History DT', ascending=False).drop_duplicates(
         subset='QT:Quote ID', 
         keep='first'
     )
     
-    # 4. Drop the temporary datetime column
+    # 5. Drop the temporary datetime column
     df_quotes = df_quotes.drop(columns=['Review History DT'])
 else:
     print("Error: The required 'Review History' column was not found in the report.")
     return
 
 # --- FIX END ---
-
-
-An error occurred during file processing: unconverted data remains when parsing with format "%b-%d-%y %I:%M %p": "  Ernie Sanders", at position 0. You might want to try:
-    - passing `format` if your strings have a consistent format;
-    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
-    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
