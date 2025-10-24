@@ -1,0 +1,53 @@
+ 1. Process Quotes Report
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+    
+    if 'Document' in df_quotes.columns:
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        
+        # Check if extraction was successful for any row
+        if df_quotes['QT:Quote ID'].eq('').all():
+             print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
+             return
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
+
+    def extract_datetime(review_history):
+        match = re.search(r'\[(\w{3}-\d{1,2}-\d{2} \d{1,2}:\d{2} [AP]M)\]', review_history)
+        if match:
+            return pd.to_datetime(match.group(1), format='%b-%d-%y %I:%M %p')
+        else:
+            return None
+            
+    # Assuming 'Review History' is the column name
+    if 'Review History' in df_quotes.columns:
+        # Extract datetime part and convert to datetime object
+        df_quotes['Review History DT'] = pd.to_datetime(df_quotes['Review History'].str.extract(r'\[(.*?)\]', expand=False).str.strip(), format='%b-%d-%y %I:%M %p')
+        
+        # Sort by datetime and drop duplicates
+        df_quotes = df_quotes.sort_values(by='Review History DT', ascending=False).drop_duplicates(subset='QT:Quote ID', keep='first')
+        
+        # Drop the temporary datetime column
+        df_quotes = df_quotes.drop(columns=['Review History DT'])
+    else:
+        print("Error: The required 'Review History' column was not found in the report.")
+        return
+        
+        # Assuming 'Review History' is the column name
+        if 'Review History' in df_quotes.columns:
+            # Extract datetime part and convert to datetime object
+            df_quotes['Review History DT'] = pd.to_datetime(df_quotes['Review History'].str.extract(r'\[(\w{3}-\d{2}-\d{2} \d{1,2}:\d{2} [AP]M)\]', expand=False), format='%b-%d-%y %I:%M %p')
+            
+            # Sort by datetime and drop duplicates
+            df_quotes = df_quotes.sort_values(by='Review History DT', ascending=False).drop_duplicates(subset='QT:Quote ID', keep='first')
+            
+            # Drop the temporary datetime column
+            df_quotes = df_quotes.drop(columns=['Review History DT'])
+        else:
+            print("Error: The required 'Review History' column was not found in the report.")
+            return
