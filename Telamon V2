@@ -1,4 +1,1 @@
-l5lopez2@viaero-ops Telamon]$ python test.py
-/var/snap_data/VENV.system/lib64/python3.11/site-packages/openpyxl/styles/stylesheet.py:226: UserWarning: Workbook contains no default style, apply openpyxl's default
-  warn("Workbook contains no default style, apply openpyxl's default")
-/var/data/Support_Data/quickbase/Telamon/test.py:30: FutureWarning:
+/home/airflow/airflow/reports
