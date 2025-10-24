@@ -1,8 +1,10 @@
-# Extract the Quote ID from the Document column
-# It splits the string by the first occurrence of '-', and keeps the first part
-Quotes_Summary_['QT:Quote ID_quotes'] = Quotes_Summary_['Document'].str.split('-', n=1).str[0]
+# 1. Extract the Quote ID (e.g., 'Quote_SV0319.00') from the 'Document' column
+#    Splits the string by the first '-', and keeps the first part
+Quotes_Report_['QT:Quote ID_quotes'] = Quotes_Report_['Document'].str.split('-', n=1).str[0]
 
-# --- Optional: Complete the duplicate removal process again ---
-# Remove duplicates and keep the latest based on Review History
-Quotes_Summary_ = Quotes_Summary_.sort_values(by=['QT:Quote ID_quotes', 'Review History'], ascending=[True, False])
-Quotes_Summary_ = Quotes_Summary_.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
+# 2. Sort the DataFrame to put the latest 'Review History' on top for each Quote ID
+#    Ascending=True groups the IDs; Ascending=False puts the highest/latest Review History first
+Quotes_Report_ = Quotes_Report_.sort_values(by=['QT:Quote ID_quotes', 'Review History'], ascending=[True, False])
+
+# 3. Remove duplicates, keeping only the first (which is the one with the latest Review History)
+Quotes_Report_ = Quotes_Report_.drop_duplicates(subset='QT:Quote ID_quotes', keep='first')
