@@ -482,3 +482,424 @@ try:
         print("One or both files failed to download. Comparison aborted.")
 except Exception as e:
     print(f"An error occurred during file processing: {e}")
+
+
+===========V2
+
+import paramiko
+import pandas as pd
+import os
+from datetime import datetime
+import openpyxl
+import re 
+
+# Define a regex pattern for Quote ID outside the function for consistency
+QUOTE_ID_PATTERN = r'([A-Z]{2}\d{4}\.\d{1,2})' 
+
+def upload_file_to_sftp(local_file_path, host, port, username, password, remote_file_path):
+    """Uploads a file to an SFTP server."""
+    ssh = None
+    sftp = None
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+        
+        # Get the filename from the local file path
+        filename = os.path.basename(local_file_path)
+        
+        # Upload the file
+        full_remote_path = os.path.join(remote_file_path, filename)
+        sftp.put(local_file_path, full_remote_path)
+        print(f"File uploaded successfully to {full_remote_path}")
+        
+    except Exception as e:
+        print(f"Error uploading file: {e}")
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def get_latest_file(sftp, remote_file_path, file_prefix):
+    """
+    Get the latest file from the SFTP server based on the file prefix.
+    """
+    files = sftp.listdir(remote_file_path)
+    latest_file = None
+    latest_timestamp = None
+    for file in files:
+        if file.startswith(file_prefix):
+            try:
+                # Use stat to get file modification time
+                file_stat = sftp.stat(os.path.join(remote_file_path, file))
+                timestamp_obj = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                if latest_timestamp is None or timestamp_obj > latest_timestamp:
+                    latest_timestamp = timestamp_obj
+                    latest_file = file
+            except (ValueError, IndexError, FileNotFoundError):
+                continue
+    return latest_file
+
+def download_file_from_sftp_to_network(output_network_path, host, port, username, password, remote_file_path, file_prefix):
+    """
+    Downloads a single file from an SFTP server to a specified network directory.
+    Returns the full local path of the downloaded file.
+    """
+    print(f"Starting SFTP file download for prefix: {file_prefix}")
+    ssh = None
+    sftp = None
+    try:
+        os.makedirs(output_network_path, exist_ok=True)
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password)
+        sftp = ssh.open_sftp()
+
+        latest_file = get_latest_file(sftp, remote_file_path, file_prefix)
+        if latest_file:
+            full_remote_path = os.path.join(remote_file_path, latest_file)
+            full_local_path = os.path.join(output_network_path, latest_file)
+            print(f"Downloading file: {full_remote_path} to {full_local_path}")
+            try:
+                sftp.get(full_remote_path, full_local_path)
+                print(f"File downloaded successfully to {full_local_path}")
+                return full_local_path
+            except Exception as e:
+                print(f"Error downloading file: {e}")
+        else:
+            print(f"No matching files found with prefix {file_prefix} in the specified SFTP directory.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during SFTP download: {e}")
+        return None
+    finally:
+        if sftp:
+            sftp.close()
+        if ssh:
+            ssh.close()
+
+def create_duplicate_analysis_report(df_diff, output_path):
+    """
+    Create a detailed report of all duplicate Quote IDs with their data from both sources.
+    This report is created *before* the final resolution for debugging.
+    """
+    duplicates_mask = df_diff.duplicated(subset='QT:Quote ID', keep=False)
+    duplicate_rows = df_diff[duplicates_mask].copy()
+    
+    if duplicate_rows.empty:
+        print("No duplicates found for analysis.")
+        return
+    
+    print(f"Creating duplicate analysis report with {len(duplicate_rows)} duplicate rows...")
+    
+    analysis_columns = ['QT:Quote ID']
+    for col in duplicate_rows.columns:
+        if 'quote id' not in col.lower() and any(keyword in col.lower() for keyword in [
+            'doc review status', 'review history', 'site #', 
+            'document type', 'date approved', 'rejection notes'
+        ]):
+            analysis_columns.append(col)
+    
+    df_analysis = duplicate_rows[analysis_columns].copy()
+    df_analysis['Data_Source'] = 'Difference_Duplicates_Pre_Resolution'
+    df_analysis = df_analysis.sort_values('QT:Quote ID')
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    analysis_filename = f"DUPLICATE_ANALYSIS_{timestamp}.xlsx"
+    analysis_path = os.path.join(output_path, analysis_filename)
+    
+    try:
+        df_analysis.to_excel(analysis_path, index=False)
+        print(f"\n*** DUPLICATE ANALYSIS REPORT CREATED ***: {analysis_path}")
+    except Exception as e:
+        print(f"Error saving duplicate analysis report: {e}")
+
+def create_merged_duplicates_report(merged_df, output_path):
+    """
+    Create a report of all duplicate Quote IDs in the merged data before any filtering.
+    """
+    duplicates_mask = merged_df.duplicated(subset='QT:Quote ID', keep=False)
+    duplicate_rows = merged_df[duplicates_mask].copy()
+    
+    if duplicate_rows.empty:
+        print("No duplicates found in merged data.")
+        return
+    
+    print(f"Creating merged duplicates report with {len(duplicate_rows)} duplicate rows...")
+    
+    analysis_columns = ['QT:Quote ID']
+    for col in duplicate_rows.columns:
+        if 'quote id' not in col.lower() and any(keyword in col.lower() for keyword in [
+            'doc review status', 'review history', 'site #', 
+            'document type', 'date approved', 'rejection notes'
+        ]):
+            analysis_columns.append(col)
+    
+    df_analysis = duplicate_rows[analysis_columns].copy()
+    df_analysis['Data_Source'] = 'Merged_Raw_Data_Duplicates'
+    df_analysis = df_analysis.sort_values('QT:Quote ID')
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    analysis_filename = f"MERGED_DUPLICATES_{timestamp}.xlsx"
+    analysis_path = os.path.join(output_path, analysis_filename)
+    
+    try:
+        df_analysis.to_excel(analysis_path, index=False)
+        print(f"\n*** MERGED DUPLICATES REPORT CREATED ***: {analysis_path}")
+    except Exception as e:
+        print(f"Error saving merged duplicates report: {e}")
+
+def handle_duplicate_quotes_with_priority_mapping(df_diff):
+    """
+    Handle ALL duplicate QT:Quote ID by applying priority mapping for Doc Review Status Text 
+    from the Report side.
+    Priority order: 1. Approved, 2. Pending Review, 3. Rejected.
+    """
+    duplicates_mask = df_diff.duplicated(subset='QT:Quote ID', keep=False)
+    duplicate_rows = df_diff[duplicates_mask].copy()
+    
+    if duplicate_rows.empty:
+        return df_diff
+    
+    print(f"Found {len(duplicate_rows)} duplicate quote rows to process with priority mapping")
+    
+    # Define priority mapping for Doc Review Status Text
+    priority_order = {
+        'Approved': 1,
+        'Pending Review': 2,
+        'Rejected': 3
+    }
+    
+    processed_rows = []
+    
+    for quote_id in duplicate_rows['QT:Quote ID'].unique():
+        quote_duplicates = duplicate_rows[duplicate_rows['QT:Quote ID'] == quote_id].copy()
+        
+        # 1. Add priority column: statuses not in the map get 999 (lowest priority)
+        quote_duplicates['priority'] = quote_duplicates['Doc Review Status Text'].map(priority_order).fillna(999)
+        
+        # 2. Sort by priority (lower number = higher priority). 
+        #    Use 'Review History' as a tie-breaker if priorities are equal.
+        quote_duplicates = quote_duplicates.sort_values(by=['priority', 'Review History'], ascending=[True, False])
+        
+        # 3. Keep the first row (highest priority)
+        selected_row = quote_duplicates.iloc[0:1].copy()
+        processed_rows.append(selected_row)
+    
+    if processed_rows:
+        processed_df = pd.concat(processed_rows, ignore_index=True)
+        
+        # Remove all original duplicate rows
+        df_diff = df_diff[~duplicates_mask]
+        
+        # Add back the processed rows (highest priority for each quote ID)
+        df_diff = pd.concat([df_diff, processed_df], ignore_index=True)
+        
+        print(f"Processed {len(processed_df)} unique duplicate quotes with priority mapping")
+    
+    return df_diff
+
+def process_and_compare_files(quote_report_path, quote_tracker_path):
+    """
+    Reads the two files, extracts Quote ID, merges, compares, and resolves duplicates.
+    """
+    print(f"\n--- Starting comparison between: {os.path.basename(quote_report_path)} and {os.path.basename(quote_tracker_path)} ---")
+    
+    try:
+        df_quotes = pd.read_csv(quote_report_path)
+        df_tracker = pd.read_excel(quote_tracker_path, engine='openpyxl')
+    except FileNotFoundError as e:
+        print(f"Error: One of the downloaded files was not found. Details: {e}")
+        return
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
+
+    # Clean column names
+    df_quotes.columns = df_quotes.columns.str.strip()
+    df_tracker.columns = df_tracker.columns.str.strip()
+    
+    # --- Data Standardization for Merge ---
+
+    # 1. Process Quotes Report (df_quotes)
+    if 'Site #' in df_quotes.columns:
+        df_quotes['Site #'] = df_quotes['Site #'].astype(str).str.strip().str.upper().str.zfill(4)
+    else:
+        print("Error: The required 'Site #' column was not found in the report.")
+        return
+
+    if 'Document' in df_quotes.columns:
+        # Use str.extract with the regex pattern to reliably get only the core Quote ID
+        df_quotes['QT:Quote ID'] = df_quotes['Document'].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        
+        if df_quotes['QT:Quote ID'].eq('').all():
+             print("Error: Failed to extract a valid Quote ID from the 'Document' column using the regex pattern.")
+             return
+    else:
+        print("Error: The required 'Document' column was not found in the report.")
+        return
+
+    # 2. Process Quote Tracker (df_tracker)
+    REQUIRED_ROOT_ID_COL = 'QT:Root Cell ID'
+    REQUIRED_QUOTE_ID_COL = 'QT:Quote ID'
+    TARGET_SITE_COL = 'Site #'
+    
+    if REQUIRED_ROOT_ID_COL in df_tracker.columns:
+        df_tracker[TARGET_SITE_COL] = df_tracker[REQUIRED_ROOT_ID_COL]
+        df_tracker[TARGET_SITE_COL] = df_tracker[TARGET_SITE_COL].astype(str).str.strip().str.upper().str.zfill(4)
+        df_tracker.drop(columns=[REQUIRED_ROOT_ID_COL], errors='ignore', inplace=True)
+    else:
+        print(f"Error: The required '{REQUIRED_ROOT_ID_COL}' was not found in the Tracker file.")
+        return
+    
+    if REQUIRED_QUOTE_ID_COL in df_tracker.columns:
+        extracted_ids = df_tracker[REQUIRED_QUOTE_ID_COL].astype(str).str.extract(QUOTE_ID_PATTERN).fillna('')
+        df_tracker[REQUIRED_QUOTE_ID_COL] = extracted_ids
+    else:
+        print(f"Error: The required '{REQUIRED_QUOTE_ID_COL}' was not found in the Tracker file.")
+        return
+
+    # --- De-duplicate df_quotes to keep only the latest Report entry (based on Review History) ---
+    df_quotes['TEMP_QUOTE_ID_PREFIX'] = df_quotes['Document'].str.split('-', n=1).str[0]
+    df_quotes = df_quotes.sort_values(by=['TEMP_QUOTE_ID_PREFIX', 'Review History'], ascending=[True, False])
+    df_quotes = df_quotes.drop_duplicates(subset='TEMP_QUOTE_ID_PREFIX', keep='first')
+    df_quotes.drop(columns=['TEMP_QUOTE_ID_PREFIX'], inplace=True) 
+    
+    # --- Merge on QUOTE ID only ---
+    merged_df = pd.merge(
+        df_quotes,
+        df_tracker,
+        on='QT:Quote ID',
+        how='left',
+        suffixes=('_quotes', '_tracker')
+    )
+    
+    # Create merged duplicates report BEFORE any filtering
+    create_merged_duplicates_report(merged_df, os.path.dirname(quote_report_path))
+        
+    # --- Comparison Logic ---
+    
+    # 1. Concatenate key columns from Quotes_Report_
+    merged_df['Conca_quotes'] = merged_df[[
+        'Site #_quotes', 'Document Type - RAN', 'Review History',
+        'Doc Review Status Text', 'Rejection Notes', 'Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # 2. Concatenate key columns from Quote_Tracker_Data_
+    merged_df['Conca_tracker'] = merged_df[[
+        'Site #_tracker', 'QT:QB - Document Type', 'QT:QB - Review History',
+        'QT:QB - Doc Review Status Text', 'QT:QB - Rejection Notes', 'QT:QB - Date Approved'
+    ]].astype(str).agg('|'.join, axis=1)
+
+    # 3. Filter for differences or missing tracker data
+    df_diff = merged_df[(merged_df['Conca_quotes'] != merged_df['Conca_tracker']) | merged_df['Site #_tracker'].isnull()]
+    
+    # 4. Remove rows where the Report's Quote ID was invalid (blank)
+    df_diff = df_diff[df_diff['QT:Quote ID'].notna() & (df_diff['QT:Quote ID'] != '')]
+
+    # Debug: Create duplicate analysis report BEFORE processing duplicates
+    create_duplicate_analysis_report(df_diff, os.path.dirname(quote_report_path))
+
+    # ********************************************************************
+    # ** THE FIX IS HERE **: Use priority mapping as the final de-duplicator
+    # ********************************************************************
+    df_diff = handle_duplicate_quotes_with_priority_mapping(df_diff)
+    
+    # Filter out rows where Document Type - RAN is "Debit Memo" or "Ground RAN Invoice"
+    initial_rows = len(df_diff)
+    df_diff = df_diff[~df_diff['Document Type - RAN'].isin(['Debit Memo', 'Ground RAN Invoice'])]
+    filtered_rows = initial_rows - len(df_diff)
+    if filtered_rows > 0:
+        print(f"Filtered out {filtered_rows} rows with Document Type 'Debit Memo' or 'Ground RAN Invoice'")
+    
+    # ====================================================================
+    # === OUTPUT: DEBUG/COMPARISON FILE (Raw data of differences) ===
+    # ====================================================================
+    if not df_diff.empty:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_file_name = f"DEBUG_Comparison_Differences_Raw_{timestamp}.xlsx"
+        debug_output_path = os.path.join(os.path.dirname(quote_report_path), debug_file_name)
+        
+        df_diff.to_excel(debug_output_path, index=False)
+        print(f"\n*** COMPARISON DEBUG FILE CREATED ***: Differences (merged raw data) saved to: {debug_output_path}")
+
+    # ====================================================================
+    # === OUTPUT: FINAL PROCESSED REPORT (Requirement 6) ===
+    # ====================================================================
+    if not df_diff.empty:
+        df_output = df_diff[[
+            'QT:Quote ID', 
+            'Submittal Date',
+            'Document Type - RAN',
+            'Review History',
+            'Doc Review Status Text',
+            'Date Approved',
+            'Rejection Notes',
+            'Redline Notes'
+        ]].rename(columns={
+            'QT:Quote ID': 'QUOTE_TRACKER_XITOR_KEY',
+            'Submittal Date': 'QT_SUBMITTAL_DATE',
+            'Document Type - RAN': 'QT_QB__DOCUMENT_TYPE',
+            'Review History': 'QT_QB__REVIEW_HISTORY',
+            'Doc Review Status Text': 'QT_QB__DOC_REVIEW_STATUS_TEXT',
+            'Date Approved': 'QT_QB__DATE_APPROVED',
+            'Rejection Notes': 'QT_QB__REJECTION_NOTES',
+            'Redline Notes': 'QT_QB_RED_LINE_NOTES'
+        })
+        
+        timestamp = datetime.now().strftime('%m%d%Y_%H%M%S')
+        output_file_name = f"QB_QUOTE_{timestamp}.xlsx"
+        output_path = os.path.join(os.path.dirname(quote_report_path), output_file_name)
+        
+        try:
+            df_output.to_excel(output_path, index=False)
+            print(f"Final Discrepancy Report saved to: {output_path}")
+            
+            sftp_host = '54.225.75.239'
+            sftp_port = 22
+            sftp_username = 'sea2_es'
+            sftp_password = '' # WARNING: Hardcoded password, consider secure environment variables
+            sftp_remote_path = '/home/samsung_sea2/es/Inbound/Rancomm/Quickbase_Reports/QUOTE/'
+            upload_file_to_sftp(output_path, sftp_host, sftp_port, sftp_username, sftp_password, sftp_remote_path)
+            
+        except Exception as e:
+            print(f"Error saving/uploading final report: {e}")
+    
+# Main script execution
+if __name__ == '__main__':
+    try:
+        # Define the local path where files are downloaded
+        network_path = r'/home/airflow/airflow/reports'
+        
+        # --- File 1: Quote_Tracker_Data_ (Source 1) ---
+        host1 = 'ftp.onevizion.com'
+        port1 = 22
+        username1 = 'sea2_es'
+        password1 = '' # WARNING: Hardcoded password, consider secure environment variables
+        remote_file_path1 = '/home/samsung_sea2/es/Rancomm/'
+        file_prefix1 = 'Quote_Tracker_Data_'
+        tracker_file_path = download_file_from_sftp_to_network(network_path, host1, port1, username1, password1, remote_file_path1, file_prefix1)
+
+        # --- File 2: Quotes_Report_ (Source 2) ---
+        host2 = '105.52.12.194'
+        port2 = 1022
+        username2 = 'samrftool'
+        password2 = '' # WARNING: Hardcoded password, consider secure environment variables
+        remote_file_path2 = '/var/data/Support_Data/quickbase/Quotes/'
+        file_prefix2 = 'Quotes_Report_'
+        quotes_file_path = download_file_from_sftp_to_network(network_path, host2, port2, username2, password2, remote_file_path2, file_prefix2)
+
+        if quotes_file_path and tracker_file_path:
+            process_and_compare_files(quotes_file_path, tracker_file_path)
+        else:
+            print("\n🚨 One or both files failed to download. Comparison aborted.")
+            
+    except Exception as e:
+        print(f"\n🚨 An unhandled error occurred during file processing: {e}")
+
+
