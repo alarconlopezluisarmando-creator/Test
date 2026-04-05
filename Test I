@@ -1,1 +1,975 @@
-a
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.email import EmailOperator
+from datetime import datetime, timedelta, date
+import pandas as pd
+import os
+import re
+import warnings
+import numpy as np
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+import pendulum
+import paramiko
+import base64
+
+# Suppress the UserWarning from pandas about openpyxl
+warnings.simplefilter(action='ignore', category=UserWarning)
+
+# Configuration - SSH Connection for ssh_viaero_ov
+
+
+# Local temp file paths
+LOCAL_FILE_PATH = '/opt/airflow/staging_area/BMS_TrackerProgress_latest.xlsx'
+LOCAL_FILE_PATH_II = '/opt/airflow/staging_area/BMS_Progress_Tracker_II_latest.xlsx'
+
+# ============================================================================
+# MILESTONE MAPPING TABLE
+# Row ID | Task Name | F/A | Custom Name | Milestone
+# This mapping controls display names and sort order
+# ============================================================================
+MILESTONE_MAPPING = [
+
+]
+
+# Create lookup dictionaries for fast access
+MILESTONE_LOOKUP = {}
+TASK_NAME_FA_LOOKUP = {}
+for row_id, task_name, fa, custom_name, milestone_prefix in MILESTONE_MAPPING:
+    # Lookup by milestone string
+    key = f"{milestone_prefix}) {task_name}"
+    MILESTONE_LOOKUP[key] = {
+        'row_id': row_id,
+        'task_name': task_name,
+        'fa': fa,
+        'custom_name': custom_name,
+        'milestone': milestone_prefix
+    }
+    # Lookup by Task Name + F/A (more reliable)
+    task_fa_key = f"{task_name}|{fa}"
+    TASK_NAME_FA_LOOKUP[task_fa_key] = row_id
+
+# ============================================================================
+# CATEGORY MAPPING
+# Maps Custom Name to Weekly category for display
+# ============================================================================
+CATEGORY_MAPPING = {
+    'Pre-Con - Site Walk': 'A&E Site Walks',
+    'Pre-Con - Site Walk (Cumulative)': 'A&E Site Walks',
+    'Pre-Con - Cable BOM and LE': 'A&E Lease Exhibit',
+    'Pre-Con - Cable BOM and LE (Cumulative)': 'A&E Lease Exhibit',
+    'Pre-Con - Cable BOM and LE - Tower': 'A&E Lease Exhibit',
+    'Pre-Con - Cable BOM and LE - Tower (Cumulative)': 'A&E Lease Exhibit',
+    'BBU - Ground Install (sites)': 'BMS2 Cx Complete',
+    'BBU - Ground Install (sites) (Cumulative)': 'BMS2 Cx Complete',
+    'Pre-Con - Final Drawings': 'Final Dwgs',
+    'Pre-Con - Final Drawings (Cumulative)': 'Final Dwgs',
+    'Pre-Con - MS1 Rev Rec': 'BMS1 SVCS rev rec',
+    'Pre-Con - MS1 Rev Rec (Cumulative)': 'BMS1 SVCS rev rec',
+    'BBU - MS2 Rev Rec': 'BMS2 SVCS rev rec',
+    'BBU - MS2 Rev Rec (Cumulative)': 'BMS2 SVCS rev rec',
+    'RRH - Tower CxS': 'BMS3 Cx Start',
+    'RRH - Tower CxS (Cumulative)': 'BMS3 Cx Start',
+    'RRH - Tower CxC': 'BMS3 Cx Complete',
+    'RRH - Tower CxC (Cumulative)': 'BMS3 Cx Complete',
+    'MS3 Rev Rec': 'BMS3 SVCS rev rec',
+    'MS3 Rev Rec (Cumulative)': 'BMS3 SVCS rev rec',
+    'RFDS Approved': '',
+    'RFDS Approved (Cumulative)': '',
+    'Ground NTP': '',
+    'Ground NTP (Cumulative)': '',
+    'Ground COP Approved': '',
+    'Ground COP Approved (Cumulative)': '',
+    'Tower NTP': '',
+    'Tower NTP (Cumulative)': '',
+    'MS3 - SSV Submitted - Mobility': '',
+    'MS3 - SSV Submitted - Mobility (Cumulative)': '',
+    'MS3 - SSV Approved - Mobility': '',
+    'MS3 - SSV Approved - Mobility (Cumulative)': '',
+    'MS4 - SSV Approved - FWA': '',
+    'MS4 - SSV Approved - FWA (Cumulative)': '',
+    'MS4 Rev Rec': '',
+    'MS4 Rev Rec (Cumulative)': '',
+    'Commissioning Complete - FWA': '',
+    'Commissioning Complete - FWA (Cumulative)': '',
+    'Commissioning Complete - Mobility': '',
+    'Commissioning Complete - Mobility (Cumulative)': '',
+    'Decom Equipment Delivered': '',
+    'Decom Equipment Delivered (Cumulative)': '',
+    'MS5 - Final Site Acceptance': '',
+    'MS5 - Final Site Acceptance (Cumulative)': '',
+    'MS5 Rev Rec': '',
+    'MS5 Rev Rec (Cumulative)': '',
+    'Construction Work Package Approved': '',
+    'Construction Work Package Approved (Cumulative)': '',
+    'FWA Site Optimization Complete': '',
+    'FWA Site Optimization Complete (Cumulative)': '',
+    'Site Launch - Mobility': '',
+    'Site Launch - Mobility (Cumulative)': '',
+    'Site Launch - FWA': '',
+    'Site Launch - FWA (Cumulative)': '',
+    'Final As-Built RFDS Submitted': '',
+    'Final As-Built RFDS Submitted (Cumulative)': '',
+    'Cluster Opto Ready - Mobility': '',
+    'Cluster Opto Ready - Mobility (Cumulative)': '',
+    # Additional milestones from BMS_Progress_Tracker_II
+    '90% CDs Approved': '',
+    '90% CDs Approved (Cumulative)': '',
+    'BH Transport CIQ Created': '',
+    'BH Transport CIQ Created (Cumulative)': '',
+    'TVW Approved': '',
+    'TVW Approved (Cumulative)': '',
+    'Viaero Approval of Quality (MOS)': '',
+    'Viaero Approval of Quality (MOS) (Cumulative)': '',
+    'Volte Prelim Optimization Approval': '',
+    'Volte Prelim Optimization Approval (Cumulative)': '',
+    'Final As-Built RFDS Approved': '',
+    'Final As-Built RFDS Approved (Cumulative)': '',
+    'Final redline CD Approved': '',
+    'Final redline CD Approved (Cumulative)': '',
+    'Decom POD Form Uploaded': '',
+    'Decom POD Form Uploaded (Cumulative)': '',
+    # Additional milestones from BMS_Progress_Tracker_II (continued)
+    'CC/CM/CE Post-Test Approved': '',
+    'CC/CM/CE Post-Test Approved (Cumulative)': '',
+    'FWA Optimization Final Report Approved': '',
+    'FWA Optimization Final Report Approved (Cumulative)': '',
+}
+
+
+def get_category(custom_name):
+    """Get the Weekly category for a given Custom Name."""
+    return CATEGORY_MAPPING.get(custom_name, '')
+
+# --- Helper functions ---
+
+def sort_columns_by_date(df_pivot):
+    """Sorts the columns of a pivot table chronologically, handling both formats."""
+    def sort_key(col):
+        col_str = col
+        if col_str == 'No Date':
+            return (9999, 99, 99)
+        try:
+            if '- Week' in col_str:
+                # Handle new format: "December 2024 - January 2025-Week 1"
+                # or old format: "December 2024-Week 44"
+                parts = col_str.split('- Week')
+                week_number = int(parts[1].strip())
+                
+                # The first part before "- Week" contains the month(s)
+                # Format: "December 2024 - January 2025" or "December 2024"
+                months_part = parts[0].strip()
+                
+                # Parse the first month (the start month)
+                month_years = months_part.split(' - ')
+                first_month_year = month_years[0].strip()
+                month_year = datetime.strptime(first_month_year, '%B %Y')
+                
+                # Sort by the Monday date's month/year, then week number
+                return (month_year.year, month_year.month, week_number)
+            else:
+                month_year = datetime.strptime(col_str, '%B %Y')
+                return (month_year.year, month_year.month, 0)
+        except (ValueError, IndexError):
+            return (9999, 99, 99)
+
+    sorted_cols = sorted(df_pivot.columns, key=sort_key)
+    return df_pivot.reindex(columns=sorted_cols)
+
+
+def generate_complete_date_range_columns(df_unpivoted, date_format='month'):
+    """Generate complete date range columns between earliest and latest dates.
+    
+    Args:
+        df_unpivoted: The unpivoted dataframe with Status dates
+        date_format: 'month' for monthly columns, 'week' for weekly columns
+    
+    Returns:
+        List of date column names spanning the complete range
+    """
+    # Get valid dates (exclude NaT)
+    valid_dates = df_unpivoted[df_unpivoted['Status'].notna()]['Status']
+    
+    if len(valid_dates) == 0:
+        return []
+    
+    min_date = valid_dates.min()
+    max_date = valid_dates.max()
+    
+    date_columns = []
+    
+    if date_format == 'month':
+        # Generate all months between min and max dates
+        # Use year/month tuples for comparison to ensure all months are included
+        current_year = min_date.year
+        current_month = min_date.month
+        max_year = max_date.year
+        max_month = max_date.month
+        
+        while (current_year < max_year) or (current_year == max_year and current_month <= max_month):
+            # Create a date object for the first day of current month
+            current_date = datetime(current_year, current_month, 1)
+            month_str = current_date.strftime('%B %Y')
+            date_columns.append(month_str)
+            
+            # Move to next month
+            if current_month == 12:
+                current_month = 1
+                current_year += 1
+            else:
+                current_month += 1
+    else:  # week
+        # Generate all weeks between min and max dates using ISO week logic
+        # Use the Monday of each ISO week for consistent labeling with pivot table
+        current_date = min_date
+        while current_date <= max_date:
+            # Get the Monday (start) of the ISO week for current date
+            week_monday = current_date - pd.to_timedelta(current_date.dayofweek, unit='D')
+            week_sunday = week_monday + timedelta(days=6)
+            week_num = week_monday.isocalendar()[1]
+            month_start = week_monday.strftime('%B %Y')
+            month_end = week_sunday.strftime('%B %Y')
+            
+            # Dynamic week label showing both months if week spans across month/year boundary
+            if month_start != month_end:
+                week_str = f"{month_start} - {month_end}-Week {week_num}"
+            else:
+                week_str = f"{month_start}-Week {week_num}"
+            
+            # Only add if not duplicate (can happen when moving across year boundaries)
+            if week_str not in date_columns:
+                date_columns.append(week_str)
+            # Move to next week (from Monday)
+            current_date = week_monday + timedelta(weeks=1)
+    
+    return date_columns
+
+
+def add_cumulative_rows(df_report):
+    """Adds cumulative rows to the report dataframe."""
+    original_index_names = df_report.index.names
+    cumulative_df = df_report.copy()
+    cumulative_df = df_report.cumsum(axis=1)
+
+    cumulative_df.index = pd.MultiIndex.from_tuples(
+        [(idx[0] + ' (Cumulative)',) + idx[1:] for idx in cumulative_df.index],
+        names=original_index_names
+    )
+    
+    final_df = pd.concat([df_report, cumulative_df])
+    return final_df.sort_index(level=['Weekly', 'F/A'], sort_remaining=False)
+
+
+def add_cumulative_rows_with_custom_name(df_report):
+    """Adds cumulative rows to the report dataframe using Custom_Name for grouping."""
+    original_index_names = df_report.index.names
+    cumulative_df = df_report.copy()
+    cumulative_df = df_report.cumsum(axis=1)
+
+    # Create cumulative index with Custom_Name (Cumulative) suffix
+    # Index structure: (Custom_Name, F/A, Task_Name, Milestone)
+    cumulative_df.index = pd.MultiIndex.from_tuples(
+        [(idx[0] + ' (Cumulative)', idx[1], idx[2], idx[3]) for idx in cumulative_df.index],
+        names=original_index_names
+    )
+    
+    final_df = pd.concat([df_report, cumulative_df])
+    return final_df
+
+
+def add_cumulative_rows_with_row_id(df_report):
+    """Adds cumulative rows to the report dataframe with Row_ID for sorting."""
+    original_index_names = df_report.index.names
+    cumulative_df = df_report.copy()
+    cumulative_df = df_report.cumsum(axis=1)
+
+    # Create cumulative index with Custom_Name (Cumulative) suffix
+    # Index structure: (Row_ID, Custom_Name, F/A, Task_Name, Milestone)
+    cumulative_df.index = pd.MultiIndex.from_tuples(
+        [(idx[0], idx[1] + ' (Cumulative)', idx[2], idx[3], idx[4]) for idx in cumulative_df.index],
+        names=original_index_names
+    )
+    
+    final_df = pd.concat([df_report, cumulative_df])
+    return final_df
+
+
+def extract_f_a(milestone_str):
+    """Extracts Forecast/Actual indicator from milestone string."""
+    match = re.search(r'V:\((F|A)', milestone_str)
+    return 'Forecast' if match and match.group(1) == 'F' else 'Actual'
+
+
+def extract_names(milestone_str):
+    """Extracts task name and new name from milestone string."""
+    milestone_mapping = {
+        'Site Audit Walk Package Received-Finish': ('Site Audit Walk Package Received-Finish', 'Pre-Con - Site Walk'),
+        'Ground Lease Exhibit Received-Finish': ('Ground Lease Exhibit Received-Finish', 'Pre-Con - Cable BOM and LE'),
+        'Tower Cabling BOM Received-Finish': ('Ground Cabling BOM Received-Finish\n Tower Cabling BOM Received-Finish', 'Pre-Con - Cable BOM and LE - Tower'),
+        '100% Construction Drawing Received-Finish': ('100% Construction Drawing Received-Finish', 'Pre-Con - Final Drawings'),
+        'Billing Milestone 1 Complete-Finish': ('Billing Milestone 1 Complete-Finish', 'Pre-Con - MS1 Rev Rec'),
+        'Viaero Ground NTP Received-Finish': ('Viaero Ground NTP Received-Finish', 'Ground NTP'),
+        'Ground Construction Complete-Finish': ('Ground Construction Complete-Finish', 'BBU - Ground Install (sites)'),
+        'Billing Milestone 2 Complete-Finish': ('Billing Milestone 2 Complete-Finish', 'BBU - MS2 Rev Rec'),
+        'Viaero Tower NTP Received-Finish': ('Viaero Tower NTP Received-Finish', 'Tower NTP'),
+        'Tower Construction Start-Finish': ('Tower Construction Start-Finish', 'RRH - Tower CxS'),
+        'Tower Construction Complete-Finish': ('Tower Construction Complete-Finish', 'RRH - Tower CxC'),
+        'Billing Milestone 3 Complete-Finish': ('Billing Milestone 3 Complete-Finish', 'MS3 Rev Rec'),
+        'Billing Milestone 4 Complete-Finish': ('Billing Milestone 4 Complete-Finish', 'MS4 Rev Rec'),
+        'Decom Equipment Delivered to Teltec-Finish': ('Decom Equipment Delivered to Teltec-Finish', 'Decom Equipment Delivered'),
+        'Cluster Acceptance Mobility-Finish': ('Cluster Acceptance Mobility-Finish', 'MS5 - Final Site Acceptance'),
+        'Billing Milestone 5 Complete-Finish': ('Billing Milestone 5 Complete-Finish', 'MS5 Rev Rec'),
+        'SSV Submitted to Customer FWA-Finish': ('SSV Submitted to Customer FWA-Finish', 'MS4 - SSV Approved - FWA'),
+        'SSV Submitted to Customer Mobility-Finish': ('SSV Submitted to Customer Mobility-Finish', 'MS3 - SSV Submitted - Mobility'),
+        'RF Design RFDS Approved by Customer-Finish': ('RF Design RFDS Approved by Customer-Finish', 'RFDS Approved'),
+        'Ground COP Approved by Customer-Finish': ('Ground COP Approved by Customer-Finish', 'Ground COP Approved'),
+        'Tower Construction Work Package Approved by Customer-Finish': ('Tower Construction Work Package Approved by Customer-Finish', 'Construction Work Package Approved'),
+        'SSV Approved by Customer Mobility-Finish': ('SSV Approved by Customer Mobility-Finish', 'MS3 - SSV Approved - Mobility'),
+        'SSV Approved by Customer FWA-Finish': ('SSV Approved by Customer FWA-Finish', 'MS4 - SSV Approved - FWA'),
+        'Commissioning Complete FWA-Finish': ('Commissioning Complete FWA-Finish', 'Commissioning Complete - FWA'),
+        'Commissioning Complete Mobility-Finish': ('Commissioning Complete Mobility-Finish', 'Commissioning Complete - Mobility'),
+        'FWA Site Optimization Complete-Finish': ('FWA Site Optimization Complete-Finish', 'FWA Site Optimization Complete'), 
+        'VIAERO Site Launch Mobility-Finish': ('VIAERO Site Launch Mobility-Finish', 'Site Launch - Mobility'),
+        'VIAERO Site Launch FWA-Finish': ('VIAERO Site Launch FWA-Finish', 'Site Launch - FWA'),
+        'Viaero Approval of VoLTE Preliminary Opto Report-Finish': ('Viaero Approval of VoLTE Preliminary Opto Report-Finish', 'Site Launch - Mobility'),
+        'Post Migration Initial RE Report Mobility/FWA-Finish': ('Post Migration Initial RE Report Mobility/FWA-Finish', 'Site Launch - FWA'),
+        'Final As-Built RFDS Submitted to Customer-Finish': ('Final As-Built RFDS Submitted to Customer-Finish', 'Final As-Built RFDS Submitted'),
+        # Additional milestones from BMS_Progress_Tracker_II
+        '90% Construction Drawing Approved -Finish': ('90% Construction Drawing Approved -Finish', '90% CDs Approved'),
+        'BH Transport CIQ Created/IP PLAN DEVELOPED-Finish': ('BH Transport CIQ Created/IP PLAN DEVELOPED-Finish', 'BH Transport CIQ Created'),
+        'TVW Approved by Customer-Finish': ('TVW Approved by Customer-Finish', 'TVW Approved'),
+        'Viaero Approval of Quality (MOS)-Finish': ('Viaero Approval of Quality (MOS)-Finish', 'Viaero Approval of Quality (MOS)'),
+        'Volte Prelim Optimization Approval Received-Finish': ('Volte Prelim Optimization Approval Received-Finish', 'Volte Prelim Optimization Approval'),
+        'Final As-Built RFDS Approved by Customer-Finish': ('Final As-Built RFDS Approved by Customer-Finish', 'Final As-Built RFDS Approved'),
+        'Final redline CD Approved-Finish': ('Final redline CD Approved-Finish', 'Final redline CD Approved'),
+        'Cluster Opto Ready - Mobility-Finish': ('Cluster Opto Ready - Mobility-Finish', 'Cluster Opto Ready - Mobility'),
+        'Decom POD Form Uploaded to PathWave-Finish': ('Decom POD Form Uploaded to PathWave-Finish', 'Decom POD Form Uploaded'),
+        # Additional milestones from BMS_Progress_Tracker_II (continued)
+        'CC/CM/CE Post-Test Approved by Customer-Finish': ('CC/CM/CE Post-Test Approved by Customer-Finish', 'CC/CM/CE Post-Test Approved'),
+        'FWA Optimization & Performance Final Report Approved by Customer-Finish': ('FWA Optimization & Performance Final Report Approved by Customer-Finish', 'FWA Optimization Final Report Approved')
+    }
+    
+    match = re.search(r'V:\((?:F|A) \d{4}\) (.+)', milestone_str)
+    if match:
+        milestone_name = match.group(1).strip()
+    else:
+        match = re.search(r'V:\((?:F|A)\) (.+)', milestone_str)
+        if match:
+            milestone_name = match.group(1).strip()
+        else:
+            milestone_name = milestone_str
+    
+    return milestone_mapping.get(milestone_name, (milestone_name, milestone_name))
+
+
+def get_ssh_connection():
+    """Establish SSH connection to ssh_viaero_ov server."""
+    transport = paramiko.Transport((SSH_HOST, SSH_PORT))
+    transport.connect(username=SSH_USER, password=SSH_PASS)
+    return transport
+
+
+def get_bms_ii_file_from_sftp():
+    """Download the latest BMS_Progress_Tracker_II file from SSH server."""
+    file_pattern_ii = 'BMS_Progress_Tracker_II'
+    print(f"Connecting to SSH server for BMS_Progress_Tracker_II...")
+    
+    # Establish SSH/SFTP connection
+    transport = get_ssh_connection()
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    
+    try:
+        # List files in the remote directory
+        print(f"Listing files in: {SSH_REMOTE_PATH}")
+        files = sftp.listdir(SSH_REMOTE_PATH)
+        
+        # Filter files matching the pattern
+        matching_files = [f for f in files if file_pattern_ii in f and f.endswith('.xlsx')]
+        print(f"Found {len(matching_files)} files matching pattern '{file_pattern_ii}': {matching_files}")
+        
+        if not matching_files:
+            print(f"No BMS_Progress_Tracker_II files found. Will only use main BMS_TrackerProgress_ file.")
+            return None
+        
+        # Get file stats to find the latest one
+        file_stats = []
+        for filename in matching_files:
+            remote_filepath = os.path.join(SSH_REMOTE_PATH, filename)
+            stat = sftp.stat(remote_filepath)
+            file_stats.append((filename, stat.st_mtime))
+        
+        # Sort by modification time (descending) to get the latest
+        file_stats.sort(key=lambda x: x[1], reverse=True)
+        latest_file = file_stats[0][0]
+        latest_file_path = os.path.join(SSH_REMOTE_PATH, latest_file)
+        
+        print(f"Latest BMS_Progress_Tracker_II file identified: {latest_file} (modified: {datetime.fromtimestamp(file_stats[0][1])})")
+        
+        # Ensure local directory exists
+        os.makedirs(os.path.dirname(LOCAL_FILE_PATH_II), exist_ok=True)
+        
+        # Download the file
+        print(f"Downloading BMS_Progress_Tracker_II to: {LOCAL_FILE_PATH_II}")
+        sftp.get(latest_file_path, LOCAL_FILE_PATH_II)
+        print(f"BMS_Progress_Tracker_II file downloaded successfully.")
+        
+        return LOCAL_FILE_PATH_II
+        
+    finally:
+        sftp.close()
+        transport.close()
+        print("SSH connection closed.")
+
+
+def get_latest_file_from_sftp():
+    """Connect to SSH server and get the latest BMS_TrackerProgress_.xlsx file."""
+    print(f"Connecting to SSH server: {SSH_HOST}:{SSH_PORT}")
+    
+    # Establish SSH/SFTP connection
+    transport = get_ssh_connection()
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    
+    try:
+        # List files in the remote directory
+        print(f"Listing files in: {SSH_REMOTE_PATH}")
+        files = sftp.listdir(SSH_REMOTE_PATH)
+        
+        # Filter files matching the pattern
+        matching_files = [f for f in files if FILE_PATTERN in f and f.endswith('.xlsx')]
+        print(f"Found {len(matching_files)} files matching pattern '{FILE_PATTERN}': {matching_files}")
+        
+        if not matching_files:
+            raise FileNotFoundError(f"No files found matching pattern '{FILE_PATTERN}' in {SSH_REMOTE_PATH}")
+        
+        # Get file stats to find the latest one
+        file_stats = []
+        for filename in matching_files:
+            remote_filepath = os.path.join(SSH_REMOTE_PATH, filename)
+            stat = sftp.stat(remote_filepath)
+            file_stats.append((filename, stat.st_mtime))
+        
+        # Sort by modification time (descending) to get the latest
+        file_stats.sort(key=lambda x: x[1], reverse=True)
+        latest_file = file_stats[0][0]
+        latest_file_path = os.path.join(SSH_REMOTE_PATH, latest_file)
+        
+        print(f"Latest file identified: {latest_file} (modified: {datetime.fromtimestamp(file_stats[0][1])})")
+        
+        # Ensure local directory exists
+        os.makedirs(os.path.dirname(LOCAL_FILE_PATH), exist_ok=True)
+        
+        # Download the file
+        print(f"Downloading file to: {LOCAL_FILE_PATH}")
+        sftp.get(latest_file_path, LOCAL_FILE_PATH)
+        print(f"File downloaded successfully.")
+        
+        return LOCAL_FILE_PATH
+        
+    finally:
+        sftp.close()
+        transport.close()
+        print("SSH connection closed.")
+
+
+def get_milestone_info(milestone_str):
+    """Extract milestone info from the MILESTONE_MAPPING."""
+    # Try exact match first
+    if milestone_str in MILESTONE_LOOKUP:
+        return MILESTONE_LOOKUP[milestone_str]
+    
+    # Try to extract info from the milestone string
+    fa = 'Forecast' if '(F ' in milestone_str or '(F)' in milestone_str else 'Actual'
+    
+    # Extract task name
+    match = re.search(r'V:\((?:F|A)(?: \d+)?\) (.+)', milestone_str)
+    if match:
+        task_name = match.group(1).strip()
+    else:
+        task_name = milestone_str
+    
+    # Return default values if not found in mapping
+    return {
+        'row_id': 999,
+        'task_name': task_name,
+        'fa': fa,
+        'custom_name': task_name,
+        'milestone': milestone_str
+    }
+
+
+# ============================================================================
+# BMS GROUP MAPPING
+# Maps task names to BMS groups (BMS_1 through BMS_5)
+# ============================================================================
+BMS_GROUP_MAPPING = {
+    'Pre-Con - Site Walk': 'BMS_1',
+    'Pre-Con - Cable BOM and LE': 'BMS_1',
+    'RFDS Approved': 'BMS_1',
+    'Pre-Con - Final Drawings': 'BMS_1',
+    'Pre-Con - MS1 Rev Rec': 'BMS_1',
+    '90% CDs Approved': 'BMS_1',
+    
+    'Ground NTP': 'BMS_2',
+    'BBU - Ground Install (sites)': 'BMS_2',
+    'Ground COP Approved': 'BMS_2',
+    'BBU - MS2 Rev Rec': 'BMS_2',
+    'BH Transport CIQ Created': 'BMS_2',
+    
+    'Tower NTP': 'BMS_3',
+    'RRH - Tower CxS': 'BMS_3',
+    'RRH - Tower CxC': 'BMS_3',
+    'MS3 Rev Rec': 'BMS_3',
+    'Commissioning Complete - FWA': '',
+    'Commissioning Complete - Mobility': 'BMS_3',
+    'MS3 - SSV Submitted - Mobility': 'BMS_3',
+    'MS3 - SSV Approved - Mobility': 'BMS_3',
+    'Construction Work Package Approved': 'BMS_3',
+    'TVW Approved': 'BMS_3',
+    'Site Launch - Mobility': 'BMS_3',
+    
+    'Site Launch - FWA': 'BMS_4',
+    'MS4 - SSV Approved - FWA': 'BMS_4',
+    'CC/CM/CE Post-Test Approved': 'BMS_4',
+    'FWA Optimization Final Report Approved': 'BMS_4',
+    'FWA Site Optimization Complete': 'BMS_4',
+    'Viaero Approval of Quality (MOS)': 'BMS_4',
+    'Volte Prelim Optimization Approval': 'BMS_4',
+    'MS4 Rev Rec': 'BMS_4',
+    
+    'Final As-Built RFDS Submitted': 'BMS_5',
+    'MS5 - Final Site Acceptance': 'BMS_5',
+    'Decom Equipment Delivered': 'BMS_5',
+    'MS5 Rev Rec': 'BMS_5',
+    'Final As-Built RFDS Approved': 'BMS_5',
+    'Final redline CD Approved': 'BMS_5',
+    'Cluster Opto Ready - Mobility': 'BMS_5',
+    'Decom POD Form Uploaded': 'BMS_5',
+}
+
+
+def get_bms_group(task_name):
+    """Get the BMS group for a given task name."""
+    return BMS_GROUP_MAPPING.get(task_name, '')
+
+
+def format_excel_start_at_b3(file_path):
+    """Format Excel file: start at B3, blue header with white text, 70% zoom, week column line breaks, and 150px column width."""
+    wb = load_workbook(file_path)
+    
+    # Define styles
+    blue_fill = PatternFill(start_color="0066CC", end_color="0066CC", fill_type="solid")
+    white_font = Font(color="FFFFFF", bold=True)
+    center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        
+        # Skip the all_bms_g tab as it contains graphs
+        if sheet_name == 'all_bms_g':
+            continue
+        
+        # Insert empty row at top (row 1)
+        ws.insert_rows(1)
+        
+        # Insert empty column at left (column A)
+        ws.insert_cols(1)
+        
+        # Format the header row (now row 2 after insertion)
+        for cell in ws[2]:
+            cell.fill = blue_fill
+            cell.font = white_font
+            cell.alignment = center_alignment
+            
+            # Add line breaks to week columns (format: "October 2024 - Week 44" -> "October 2024 -\nWeek 44")
+            if cell.value and isinstance(cell.value, str) and ' - Week ' in cell.value:
+                cell.value = cell.value.replace(' - Week ', '-\nWeek ')
+        
+        # Set header row height to accommodate multi-line text
+        ws.row_dimensions[2].height = 80
+        
+        # Set all column widths to approximately 150 pixels (22 character units for Calibri 11pt)
+        for col in ws.columns:
+            col_letter = col[0].column_letter
+            ws.column_dimensions[col_letter].width = 22
+        
+        # Set zoom to 70%
+        ws.sheet_view.zoomScale = 70
+    
+    wb.save(file_path)
+    print(f"Applied B3 formatting with blue header, 70% zoom, and week column line breaks to {file_path}")
+
+
+def filter_by_bms_group(df_report, bms_group):
+    """Filter the report dataframe to include only rows belonging to a specific BMS group.
+    
+    Args:
+        df_report: The weekly report dataframe
+        bms_group: The BMS group to filter by (e.g., 'BMS_1', 'BMS_2', etc.)
+    
+    Returns:
+        Filtered dataframe with only the specified BMS group milestones
+    """
+    # Filter by BMS group - strip "(Cumulative)" suffix for lookup to include cumulative rows
+    filtered_df = df_report[df_report['Task Name'].apply(
+        lambda x: get_bms_group(x.replace(' (Cumulative)', '')) == bms_group
+    )].copy()
+    
+    # Reset the Weekly category to show for the first row only
+    # Extract base task name (without "(Cumulative)" suffix)
+    filtered_df['Base_Task_Name'] = filtered_df['Task Name'].str.replace(' (Cumulative)', '', regex=False)
+    # Mark first row of each base task name group
+    filtered_df['Is_First'] = ~filtered_df.duplicated(subset=['Base_Task_Name'], keep='first')
+    # Get category for first rows
+    filtered_df['Weekly'] = filtered_df.apply(
+        lambda row: get_category(row['Base_Task_Name']) if row['Is_First'] else '', 
+        axis=1
+    )
+    # Drop helper columns
+    filtered_df = filtered_df.drop(columns=['Base_Task_Name', 'Is_First'])
+    
+    return filtered_df
+
+
+def generate_bms_report(**context):
+    """Main function to generate BMS Progress Tracker report."""
+    print("=" * 60)
+    print("Viaero BMS Progress Tracker Report Generation")
+    print("=" * 60)
+    
+    # Download the latest BMS_TrackerProgress file from SSH server
+    print("Step 1: Downloading latest BMS_TrackerProgress file from SSH server...")
+    try:
+        file_path = get_latest_file_from_sftp()
+        print(f"Successfully downloaded file to: {file_path}")
+    except Exception as e:
+        print(f"Error downloading file from SSH server: {e}")
+        raise Exception(f"Failed to download file from SSH server: {e}")
+    
+    # Download the latest BMS_Progress_Tracker_II file from SSH server
+    print("Step 2: Downloading latest BMS_Progress_Tracker_II file from SSH server...")
+    file_path_ii = get_bms_ii_file_from_sftp()
+    
+    # Read the main Excel file
+    df = None
+    df_ii = None
+    
+    try:
+        print(f"Reading main file from: {file_path}")
+        df = pd.read_excel(file_path, engine='openpyxl')
+        print("Main file read successfully.")
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        raise Exception(f"Failed to read input file: {e}")
+    
+    # Read BMS_Progress_Tracker_II file if available
+    if file_path_ii:
+        try:
+            print(f"Reading BMS_Progress_Tracker_II file from: {file_path_ii}")
+            df_ii = pd.read_excel(file_path_ii, engine='openpyxl')
+            print("BMS_Progress_Tracker_II file read successfully.")
+            
+            # Merge new milestone columns from II file into main dataframe
+            print("Merging new milestone columns from BMS_Progress_Tracker_II...")
+            # Get new milestone columns that are only in the II file
+            new_columns = [col for col in df_ii.columns 
+                          if col.startswith('V:(') and col not in df.columns]
+            print(f"Found {len(new_columns)} new milestone columns to merge: {new_columns}")
+            
+            # Merge on common key columns
+            key_cols = ['P:Viaero Root ID']
+            if 'C:Site Name (SPMS)' in df.columns and 'C:Site Name (SPMS)' in df_ii.columns:
+                key_cols.append('C:Site Name (SPMS)')
+            
+            # Only merge the new columns
+            df_merged = df.merge(
+                df_ii[['P:Viaero Root ID'] + new_columns],
+                on='P:Viaero Root ID',
+                how='left',
+                suffixes=('', '_II')
+            )
+            
+            # For each new column, take the value from II file if not NaN, otherwise keep original
+            for col in new_columns:
+                if f'{col}_II' in df_merged.columns:
+                    df_merged[col] = df_merged[col].fillna(df_merged[f'{col}_II'])
+                    df_merged = df_merged.drop(columns=[f'{col}_II'])
+            
+            # Only update df if we actually merged columns
+            if new_columns:
+                df = df_merged
+                print(f"Successfully merged {len(new_columns)} new milestone columns.")
+            
+        except Exception as e:
+            print(f"Warning: Error reading BMS_Progress_Tracker_II file: {e}")
+            print("Will proceed with main file only.")
+            df_ii = None
+    
+    # Select columns of interest - only keep columns that exist in the file
+    columns_to_keep_all = [
+        'P:Viaero Root ID',
+        'C:Site Name (SPMS)',
+        'WPK:Work Package Description',
+        'P:Project ID',
+        'C:Site ID',
+        'P:Viaero Phase',
+        'P:Viaero Project Type',
+        'P:Cluster ID',
+        'V:(F 1120) Site Audit Walk Package Received-Finish',
+        'V:(A 1120) Site Audit Walk Package Received-Finish',
+        'V:(A 1135) Ground Lease Exhibit Received-Finish',
+        'V:(F 1135) Ground Lease Exhibit Received-Finish',
+        'V:(F 1146) 100% Construction Drawing Received-Finish',
+        'V:(A 1146) 100% Construction Drawing Received-Finish',
+        'V:(F 1360) Billing Milestone 1 Complete-Finish',
+        'V:(A 1360) Billing Milestone 1 Complete-Finish',
+        'V:(F 3345) Viaero Ground NTP Received-Finish',
+        'V:(A 3345) Viaero Ground NTP Received-Finish',
+        'V:(F 3460) Ground Construction Complete-Finish',
+        'V:(A 3460) Ground Construction Complete-Finish',
+        'V:(F 3995) Billing Milestone 2 Complete-Finish',
+        'V:(A 3995) Billing Milestone 2 Complete-Finish',
+        'V:(F 3300) Viaero Tower NTP Received-Finish',
+        'V:(A 3300) Viaero Tower NTP Received-Finish',
+        'V:(F 3340) Tower Construction Start-Finish',
+        'V:(A 3340) Tower Construction Start-Finish',
+        'V:(F 3820) Tower Construction Complete-Finish',
+        'V:(A 3820) Tower Construction Complete-Finish',
+        'V:(F 5500) Billing Milestone 3 Complete-Finish',
+        'V:(A 5500) Billing Milestone 3 Complete-Finish',
+        'V:(F 4630) SSV Submitted to Customer Mobility-Finish',
+        'V:(A 4630) SSV Submitted to Customer Mobility-Finish',
+        'V:(F 5530) Billing Milestone 4 Complete-Finish',
+        'V:(A 5530) Billing Milestone 4 Complete-Finish',
+        'V:(F 5570) Cluster Acceptance Mobility-Finish',
+        'V:(A 5570) Cluster Acceptance Mobility-Finish',
+        'V:(F 5585) Billing Milestone 5 Complete-Finish',
+        'V:(A 5585) Billing Milestone 5 Complete-Finish',
+        'V:(A 1055) RF Design RFDS Approved by Customer-Finish',
+        'V:(F 1055) RF Design RFDS Approved by Customer-Finish',
+        'V:(F 3550) Ground COP Approved by Customer-Finish',
+        'V:(A 3550) Ground COP Approved by Customer-Finish',
+        'V:(F 5380) Tower Construction Work Package Approved by Customer-Finish',
+        'V:(A 5380) Tower Construction Work Package Approved by Customer-Finish',
+        'V:(F 4690) SSV Approved by Customer Mobility-Finish',
+        'V:(A 4690) SSV Approved by Customer Mobility-Finish',
+        'V:(F 4660) SSV Approved by Customer FWA-Finish',
+        'V:(A 4660) SSV Approved by Customer FWA-Finish',
+        'V:(F 4125) Commissioning Complete FWA-Finish',
+        'V:(A 4125) Commissioning Complete FWA-Finish',
+        'V:(F 4130) Commissioning Complete Mobility-Finish',
+        'V:(A 4130) Commissioning Complete Mobility-Finish',
+        'V:(A 4750) FWA Site Optimization Complete-Finish',
+        'V:(F 4750) FWA Site Optimization Complete-Finish',
+        'V:(A 4140) VIAERO Site Launch Mobility-Finish',
+        'V:(F 4140) VIAERO Site Launch Mobility-Finish',
+        'V:(A 4150) VIAERO Site Launch FWA-Finish',
+        'V:(F 4150) VIAERO Site Launch FWA-Finish',
+        'V:(A 5115) Final As-Built RFDS Submitted to Customer-Finish',
+        'V:(F 5115) Final As-Built RFDS Submitted to Customer-Finish',
+        'V:(A 3830) Decom Equipment Delivered to Teltec-Finish',
+        'V:(F 3830) Decom Equipment Delivered to Teltec-Finish',
+        # Additional milestones from BMS_Progress_Tracker_II
+        'V:(F 1145) 90% Construction Drawing Approved -Finish',
+        'V:(A 1145) 90% Construction Drawing Approved -Finish',
+        'V:(F 2470) BH Transport CIQ Created/IP PLAN DEVELOPED-Finish',
+        'V:(A 2470) BH Transport CIQ Created/IP PLAN DEVELOPED-Finish',
+        'V:(F 4405) TVW Approved by Customer-Finish',
+        'V:(A 4405) TVW Approved by Customer-Finish',
+        'V:(F 4720) Viaero Approval of Quality (MOS)-Finish',
+        'V:(A 4720) Viaero Approval of Quality (MOS)-Finish',
+        'V:(F 4784) Volte Prelim Optimization Approval Received-Finish',
+        'V:(A 4784) Volte Prelim Optimization Approval Received-Finish',
+        'V:(F 5116) Final As-Built RFDS Approved by Customer-Finish',
+        'V:(A 5116) Final As-Built RFDS Approved by Customer-Finish',
+        'V:(F 5120) Final redline CD Approved-Finish',
+        'V:(A 5120) Final redline CD Approved-Finish',
+        'V:(F 4788) Cluster Opto Ready - Mobility-Finish',
+        'V:(A 4788) Cluster Opto Ready - Mobility-Finish',
+        'V:(F 3835) Decom POD Form Uploaded to PathWave-Finish',
+        'V:(A 3835) Decom POD Form Uploaded to PathWave-Finish',
+        # Additional milestones from BMS_Progress_Tracker_II (continued)
+        'V:(F 3285) CC/CM/CE Post-Test Approved by Customer-Finish',
+        'V:(A 3285) CC/CM/CE Post-Test Approved by Customer-Finish',
+        'V:(F 4745) FWA Optimization & Performance Final Report Approved by Customer-Finish',
+        'V:(A 4745) FWA Optimization & Performance Final Report Approved by Customer-Finish'
+    ]
+    
+    # Only keep columns that exist in the dataframe
+    columns_to_keep = [col for col in columns_to_keep_all if col in df.columns]
+    
+    df = df[columns_to_keep]
+    print(f"Selected {len(columns_to_keep)} columns from data.")
+    
+    # Filter P:Viaero Project Type and P:Viaero Phase
+    df = df[
+        (df['P:Viaero Project Type'].str.contains('H// R&R', na=False)) &
+        (df['P:Viaero Phase'].str.upper() != 'PENDING')
+    ]
+    print(f"Filtered data for H// R&R project types (excluding PENDING phase): {len(df)} rows.")
+    
+    # Unpivot the milestone data
+    id_vars = [
+        'P:Viaero Root ID',
+        'C:Site Name (SPMS)',
+        'WPK:Work Package Description',
+        'P:Project ID',
+        'C:Site ID',
+        'P:Viaero Phase',
+        'P:Viaero Project Type',
+        'P:Cluster ID'
+    ]
+    
+    milestone_cols = [col for col in df.columns if col.startswith('V:(')]
+    df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
+    print(f"Unpivoted milestone data: {len(df_unpivoted)} rows.")
+    
+    # Extract and transform milestone information using extract_names() and extract_f_a()
+    print("Applying milestone mapping...")
+    def get_milestone_data(milestone_str):
+        task_name, custom_name = extract_names(milestone_str)
+        fa = extract_f_a(milestone_str)
+        # Get Row_ID using Task Name + F/A lookup (more reliable)
+        task_fa_key = f"{task_name}|{fa}"
+        row_id = TASK_NAME_FA_LOOKUP.get(task_fa_key, 999)
+        return pd.Series([custom_name, fa, task_name, row_id])
+    
+    df_unpivoted[['Custom_Name', 'F/A', 'Task_Name', 'Row_ID']] = df_unpivoted['Milestone'].apply(get_milestone_data)
+    
+    # Prepare data for weekly and monthly reports
+    df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
+    df_unpivoted['Milestone_Count'] = 1
+    
+    # Create weekly column names based on week start date for consistency
+    df_unpivoted['Week_Number'] = df_unpivoted['Status'].dt.isocalendar().week
+    df_unpivoted['ISO_Year'] = df_unpivoted['Status'].dt.isocalendar().year
+    # Get the Monday (start) of each ISO week
+    df_unpivoted['Week_Start'] = df_unpivoted['Status'] - pd.to_timedelta(df_unpivoted['Status'].dt.dayofweek, unit='D')
+    # Get the Sunday (end) of each ISO week
+    df_unpivoted['Week_End'] = df_unpivoted['Week_Start'] + timedelta(days=6)
+    
+    # Create dynamic week labels that show both months if week spans across month/year boundary
+    def get_week_label(week_start, week_end, week_number):
+        month_start = week_start.strftime('%B %Y')
+        month_end = week_end.strftime('%B %Y')
+        if month_start != month_end:
+            # Week spans across month/year boundary
+            return f"{month_start} - {month_end}-Week {week_number}"
+        else:
+            # Week is within one month
+            return f"{month_start}-Week {week_number}"
+    
+    df_unpivoted['Weekly_Column'] = df_unpivoted.apply(
+        lambda row: get_week_label(row['Week_Start'], row['Week_End'], int(row['Week_Number']))
+        if pd.notna(row['Status']) else 'No Date', axis=1
+    )
+    df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
+    df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
+    
+    # --- Weekly Report ---
+    print("Generating weekly report...")
+    weekly_pivot = pd.pivot_table(
+        df_unpivoted,
+        values='Milestone_Count',
+        index=['Row_ID', 'Custom_Name', 'F/A', 'Task_Name', 'Milestone'],
+        columns=['Weekly_Column'],
+        aggfunc='sum',
+        fill_value=0
+    )
+    
+    # Generate complete date range for weeks
+    all_week_columns = generate_complete_date_range_columns(df_unpivoted, date_format='week')
+    print(f"Generated {len(all_week_columns)} week columns in date range")
+    
+    # Reindex to include all weeks (fill missing with 0)
+    weekly_pivot = weekly_pivot.reindex(columns=all_week_columns, fill_value=0)
+    
+    final_weekly_report = weekly_pivot.copy()
+    # Weekly columns are already in correct chronological order from generate_complete_date_range_columns()
+    # Don't sort weekly reports to avoid reordering issues with ISO weeks
+    final_weekly_report = add_cumulative_rows_with_row_id(final_weekly_report)
+    final_weekly_report = final_weekly_report.reset_index()
+    
+    # Create sorting columns for proper ordering:
+    # 1. Row_ID (Task Name order)
+    # 2. Is_Cumulative (0=non-cumulative first, 1=cumulative)  
+    # 3. FA_Sort (0=Forecast first, 1=Actual)
+    final_weekly_report['Is_Cumulative'] = final_weekly_report['Custom_Name'].str.contains(r'\(Cumulative\)', regex=True).astype(int)
+    final_weekly_report['FA_Sort'] = (final_weekly_report['F/A'] == 'Actual').astype(int)
+    
+    # Sort by Row_ID, then by Is_Cumulative (non-cum first), then by FA_Sort (Forecast first)
+    # This gives: Forecast (non-cum), Actual (non-cum), Forecast (cum), Actual (cum)
+    final_weekly_report = final_weekly_report.sort_values(['Row_ID', 'Is_Cumulative', 'FA_Sort'])
+    
+    print(f"Row sample after sorting - Row_ID: {final_weekly_report['Row_ID'].head(4).tolist()}, "
+          f"Is_Cumulative: {final_weekly_report['Is_Cumulative'].head(4).tolist()}, "
+          f"FA_Sort: {final_weekly_report['FA_Sort'].head(4).tolist()}")
+    
+    # Reset index after sorting
+    final_weekly_report = final_weekly_report.reset_index(drop=True)
+    
+    # Add Weekly (Category) column based on Custom_Name
+    final_weekly_report['Weekly'] = final_weekly_report['Custom_Name'].apply(get_category)
+    
+    # Rename Custom_Name to Task Name (this is what shows in the Task Name column)
+    final_weekly_report = final_weekly_report.rename(columns={
+        'Custom_Name': 'Task Name'
+    })
+    
+    # Make Weekly appear only once per base Task Name group (without cumulative suffix)
+    # Extract base task name (without "(Cumulative)" suffix)
+    final_weekly_report['Base_Task_Name'] = final_weekly_report['Task Name'].str.replace(' (Cumulative)', '', regex=False)
+    # Mark first row of each base task name group
+    final_weekly_report['Is_First'] = ~final_weekly_report.duplicated(subset=['Base_Task_Name'], keep='first')
+    # Set Weekly to empty for non-first rows
+    final_weekly_report.loc[~final_weekly_report['Is_First'], 'Weekly'] = ''
+    final_weekly_report = final_weekly_report.drop(columns=['Task_Name', 'Row_ID', 'Is_Cumulative', 'FA_Sort', 'Base_Task_Name', 'Is_First'])
+    
+    # Reorder columns to match image: Weekly (WBS), Milestone, F/A, Task Name, then date columns
+    date_cols = [col for col in final_weekly_report.columns if col not in ['Row_ID', 'Custom_Name', 'Weekly', 'F/A', 'Task Name', 'Task_Name', 'Milestone']]
+    final_weekly_report = final_weekly_report[['Weekly', 'Milestone', 'F/A', 'Task Name'] + date_cols]
+    
+    print(f"Weekly report generated: {len(final_weekly_report)} rows, {len(final_weekly_report.columns)} columns.")
+    
+    # --- Monthly Report ---
+    print("Generating monthly report...")
+    monthly_pivot = pd.pivot_table(
+        df_unpivoted,
+        values='Milestone_Count',
+        index=['Row_ID', 'Custom_Name', 'F/A', 'Task_Name', 'Milestone'],
+        columns=['Month'],
+        aggfunc='sum',
+        fill_value=0
+    )
+    
+    # Generate complete date range for months
+    all_month_columns = generate_complete_date_range_columns(df_unpivoted, date_format='month')
+    print(f"Generated {len(all_month_columns)} month columns in date range")
+    
+    # Reindex to include all months (fill missing with 0)
+    monthly_pivot = monthly_pivot.reindex(columns=all_month_columns, fill_value=0)
+    
+    final_monthly_report = sort_columns_by_date(monthly_pivot)
+    final_monthly_report = add_cumulative_rows_with_row_id(final_monthly_report)
+    final_monthly_report = final_monthly_report.reset_index()
+    
+    # Create sorting columns for proper ordering:
+    # 1. Row_ID (Task Name order)
+    # 2. Is_Cumulative (0=non-cumulative first, 1=cumulative)  
+    # 3. FA_Sort (0=Forecast first, 1=Actual)
+    final_monthly_report['Is_Cumulative'] = final_monthly_report['Custom_Name'].str.contains(r'\(Cumulative\)', regex=True).astype(int)
+    final_monthly_report['FA_Sort'] = (final_monthly_report['F/A'] == 'Actual').astype(int)
+    
+    # Sort by Row_ID, then by Is_Cumulative (non-cum first), then by FA_Sort (Forecast first)
+    # This gives: Forecast (non-cum), Actual (non-cum), Forecast (cum), Actual (cum)
+    final_monthly_report = final_monthly_report.sort_values(['Row_ID', 'Is_Cumulative', 'FA_Sort'])
+    
+    print(f"Row sample after sorting - Row_ID: {final_monthly_report['Row_ID'].head(4).tolist()}, "
+          f"Is_Cumulative: {final_monthly_report['Is_Cumulative'].head(4).tolist()}, "
+          f"FA_Sort: {final_monthly_report['FA_Sort'].head(4).tolist()}")
+    
+    # Reset index after sorting
+    final_monthly_report = final_monthly_report.reset_index(drop=True)
+    
