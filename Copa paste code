@@ -1,70 +1,12 @@
-import pandas as pd
-import openpyxl
-from openpyxl.utils.dataframe import dataframe_to_rows
-import shutil
-import os
-
-# --- CONFIGURATION (Adjust these paths if needed) ---
-TEMPLATE_NAME = "test_template.xlsx"
-OUTPUT_NAME = "test_output_report.xlsx"
-SHEET_NAME = "All_BMS_M"
-
-def create_dummy_template(path):
-    """Creates a fake template with a header at B2 to simulate your setup."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = SHEET_NAME
-    # Put a header in B2
-    ws.cell(row=2, column=2, value="MILESTONE DATA HEADER (B2)")
-    # Add a fake 'Graph' note
-    ws.cell(row=5, column=10, value="[SIMULATED GRAPH RADIUS]")
-    wb.save(path)
-    print(f"1. Created dummy template: {path}")
-
-def run_test():
-    print("--- STARTING EXCEL INJECTION TEST ---")
-    
-    # 1. Setup Dummy Data (Simulating your BMS Data)
-    data = {
-        'Weekly': ['W1', 'W1', 'W2'],
-        'Milestone': ['M1', 'M2', 'M1'],
-        'F/A': ['F', 'A', 'F'],
-        'Task Name': ['Cable BOM', 'Ground Install', 'Cable BOM'],
-        'Oct 2024': [10, 5, 12]
-    }
-    df = pd.DataFrame(data)
-    
-    # 2. Create the template if it doesn't exist
-    create_dummy_template(TEMPLATE_NAME)
-    
-    try:
-        # 3. THE FIX: Copy the template first
-        print(f"2. Copying {TEMPLATE_NAME} to {OUTPUT_NAME}...")
-        shutil.copy(TEMPLATE_NAME, OUTPUT_NAME)
-        
-        # 4. THE FIX: Load with Openpyxl
-        print(f"3. Loading workbook...")
-        wb = openpyxl.load_workbook(OUTPUT_NAME)
-        ws = wb[SHEET_NAME]
-        
-        # 5. THE FIX: Paint data starting at B3
-        print(f"4. Injecting {len(df)} rows starting at B3...")
-        for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=False), 3):
-            for c_idx, value in enumerate(row, 2):
-                ws.cell(row=r_idx, column=c_idx, value=value)
-        
-        # 6. Save
-        wb.save(OUTPUT_NAME)
-        print(f"5. ✅ SUCCESS! File saved as {OUTPUT_NAME}")
-        
-        # Final Verification
-        if os.path.exists(OUTPUT_NAME):
-            print("--- TEST PASSED: Environment is ready for the fix ---")
-            
-    except Exception as e:
-        print(f"--- ❌ TEST FAILED ---")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Message: {str(e)}")
-
-if __name__ == "__main__":
-    run_test()
+[airflow@drtl-va5 dags_test]$ python test_excel_injection.py
+--- STARTING EXCEL INJECTION TEST ---
+1. Created dummy template: test_template.xlsx
+2. Copying test_template.xlsx to test_output_report.xlsx...
+3. Loading workbook...
+4. Injecting 3 rows starting at B3...
+5. ✅ SUCCESS! File saved as test_output_report.xlsx
+--- TEST PASSED: Environment is ready for the fix ---
+[airflow@drtl-va5 dags_test]$ ls -lh test_*.xlsx
+-rw-r--r--. 1 airflow optimus_devs 4.9K Apr  5 16:56 test_output_report.xlsx
+-rw-r--r--. 1 airflow optimus_devs 4.8K Apr  5 16:56 test_template.xlsx
+[airflow@drtl-va5 dags_test]$ 
