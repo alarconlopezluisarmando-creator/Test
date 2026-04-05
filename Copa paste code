@@ -1,0 +1,422 @@
+"""
+Viaero BMS Report Tracker Test DAG
+
+This is a test version of the Viaero BMS Report Tracker DAG that includes
+chart generation functionality. It sends emails only to l5.lopez for testing purposes.
+"""
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.email import EmailOperator
+from datetime import datetime, timedelta, date
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import base64
+import pendulum
+
+# Import all functions from the production DAG
+from Viaero_BMS_Report_Tracker import (
+    generate_bms_report,
+    get_ssh_connection,
+    get_latest_file_from_sftp,
+    MILESTONE_MAPPING,
+    MILESTONE_LOOKUP,
+    TASK_NAME_FA_LOOKUP,
+    CATEGORY_MAPPING,
+    get_category,
+    sort_columns_by_date,
+    generate_complete_date_range_columns,
+    add_cumulative_rows,
+    add_cumulative_rows_with_custom_name,
+    add_cumulative_rows_with_row_id,
+    extract_f_a,
+    extract_names,
+    get_milestone_info,
+    BMS_GROUP_MAPPING,
+    get_bms_group,
+    format_excel_start_at_b3,
+    filter_by_bms_group,
+    SSH_HOST,
+    SSH_PORT,
+    SSH_USER,
+    SSH_PASS,
+    SSH_REMOTE_PATH,
+    FILE_PATTERN,
+    LOCAL_FILE_PATH,
+    LOCAL_FILE_PATH_II,
+    get_bms_ii_file_from_sftp
+)
+
+# ============================================================================
+# CHART GENERATION CONFIGURATION
+# ============================================================================
+
+# Charts directory
+CHARTS_OUTPUT_DIR = '/opt/airflow/reports/charts'
+os.makedirs(CHARTS_OUTPUT_DIR, exist_ok=True)
+
+# Chart configuration - specify which milestones to chart and their columns
+CHART_CONFIG = [
+    {
+        'task_name': 'Pre-Con - Cable BOM and LE',
+        'columns': ['October 2024', 'November 2024', 'December 2024', 
+                   'January 2025', 'February 2025', 'March 2025'],
+        'primary_series': ['Forecast', 'Actual'],
+        'secondary_series': ['Forecast Cumulative', 'Actual Cumulative'],
+        'output_file': 'Cable_BOM_LE_Progress.png',
+        'title': 'A&E - Cable BOM and LE Progress'
+    },
+    {
+        'task_name': 'BBU - Ground Install',
+        'columns': ['October 2024', 'November 2024', 'December 2024', 
+                   'January 2025', 'February 2025', 'March 2025'],
+        'primary_series': ['Forecast', 'Actual'],
+        'secondary_series': ['Forecast Cumulative', 'Actual Cumulative'],
+        'output_file': 'Ground_Install_Progress.png',
+        'title': 'BBU - Ground Install Progress'
+    },
+    {
+        'task_name': 'RRH - Tower CxC',
+        'columns': ['October 2024', 'November 2024', 'December 2024', 
+                   'January 2025', 'February 2025', 'March 2025'],
+        'primary_series': ['Forecast', 'Actual'],
+        'secondary_series': ['Forecast Cumulative', 'Actual Cumulative'],
+        'output_file': 'Tower_CxC_Progress.png',
+        'title': 'RRH - Tower CxC Progress'
+    }
+]
+
+
+def generate_milestone_charts(**context):
+    """Generate milestone charts from the monthly report data."""
+    print("=" * 60)
+    print("Generating Milestone Charts")
+    print("=" * 60)
+    
+    # Get the generated Excel file path
+    excel_file_path = context['task_instance'].xcom_pull(task_ids='generate_bms_report')
+    print(f"Reading report from: {excel_file_path}")
+    
+    # Read the monthly report sheet
+    # Due to B3 formatting, row 0 contains the actual headers
+    df_monthly = pd.read_excel(excel_file_path, sheet_name='All_BMS_M', header=0)
+    print(f"Loaded monthly report: {len(df_monthly)} rows, {len(df_monthly.columns)} columns")
+    print(f"Columns: {df_monthly.columns.tolist()[:10]}...")
+    
+    # Identify column indices:
+    # Based on B3 formatting: Col 0=empty, Col 1='Weekly', Col 2='Milestone', 
+    # Col 3='F/A', Col 4='Task Name', then date columns
+    if len(df_monthly.columns) < 5:
+        print("Error: Not enough columns in the monthly report")
+        return []
+    
+    # Get column names by position
+    col_weekly = df_monthly.columns[1]
+    col_milestone = df_monthly.columns[2]
+    col_fa = df_monthly.columns[3]
+    col_task_name = df_monthly.columns[4]
+    
+    print(f"Identified columns:")
+    print(f"  Weekly: {col_weekly}")
+    print(f"  Milestone: {col_milestone}")
+    print(f"  F/A: {col_fa}")
+    print(f"  Task Name: {col_task_name}")
+    
+    generated_charts = []
+    
+    for chart_config in CHART_CONFIG:
+        task_name = chart_config['task_name']
+        print(f"\nProcessing chart: {task_name}")
+        
+        # Filter data for this task name using the identified column
+        task_data = df_monthly[
+            df_monthly[col_task_name].str.contains(task_name, na=False)
+        ]
+        
+        if len(task_data) == 0:
+            print(f"  Warning: No data found for task '{task_name}', skipping...")
+            continue
+        
+        # Get the date columns
+        date_columns = [col for col in chart_config['columns'] if col in df_monthly.columns]
+        
+        if len(date_columns) == 0:
+            print(f"  Warning: No matching date columns found, skipping...")
+            continue
+        
+        print(f"  Date columns: {date_columns}")
+        print(f"  Found {len(task_data)} rows for this task")
+        
+        # Extract data for each series
+        data_series = {}
+        for series_name in chart_config['primary_series'] + chart_config['secondary_series']:
+            # Filter by F/A type and cumulative status
+            is_cumulative = 'Cumulative' in series_name
+            fa_type = series_name.replace(' Cumulative', '')
+            
+            series_data = task_data[
+                (task_data[col_fa] == fa_type) &
+                (task_data[col_task_name].str.contains('Cumulative', na=False) == is_cumulative)
+            ]
+            
+            if len(series_data) > 0:
+                data_series[series_name] = series_data[date_columns].values[0]
+                print(f"  {series_name}: {len(data_series[series_name])} data points")
+            else:
+                print(f"  Warning: No data found for series '{series_name}'")
+                data_series[series_name] = [0] * len(date_columns)
+        
+        # Create the chart with secondary y-axis for cumulative data
+        fig, ax1 = plt.subplots(figsize=(14, 7))
+        
+        x = range(len(date_columns))
+        
+        # Primary Y-axis (left) - for non-cumulative data
+        color1 = 'tab:blue'
+        ax1.set_xlabel('Month', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Monthly Milestones', color=color1, fontsize=12, fontweight='bold')
+        
+        for i, series_name in enumerate(chart_config['primary_series']):
+            if series_name in data_series:
+                color = 'tab:blue' if i == 0 else 'tab:green'
+                marker = 'o' if i == 0 else '^'
+                ax1.plot(x, data_series[series_name], label=series_name, 
+                        marker=marker, color=color, linewidth=2.5, markersize=8)
+        
+        ax1.tick_params(axis='y', labelcolor=color1, labelsize=10)
+        ax1.grid(True, alpha=0.3, linestyle='--')
+        ax1.set_ylim(bottom=0)
+        
+        # Secondary Y-axis (right) - for cumulative data
+        ax2 = ax1.twinx()
+        color2 = 'tab:red'
+        ax2.set_ylabel('Cumulative Milestones', color=color2, fontsize=12, fontweight='bold')
+        
+        for i, series_name in enumerate(chart_config['secondary_series']):
+            if series_name in data_series:
+                color = 'tab:red' if i == 0 else 'tab:orange'
+                marker = 's' if i == 0 else 'd'
+                ax2.plot(x, data_series[series_name], label=series_name,
+                        marker=marker, color=color, linewidth=2.5, linestyle='--', markersize=8)
+        
+        ax2.tick_params(axis='y', labelcolor=color2, labelsize=10)
+        ax2.set_ylim(bottom=0)
+        
+        # Set x-axis labels with rotation
+        plt.xticks(x, date_columns, rotation=45, ha='right', fontsize=10)
+        
+        # Title
+        title = chart_config.get('title', task_name)
+        plt.title(title, fontsize=16, fontweight='bold', pad=20)
+        
+        # Combine legends from both axes
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, 
+                  fontsize=11, loc='best', framealpha=0.9)
+        
+        plt.tight_layout()
+        
+        # Save chart
+        output_path = os.path.join(CHARTS_OUTPUT_DIR, chart_config['output_file'])
+        plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"  Chart saved: {output_path}")
+        generated_charts.append(output_path)
+    
+    print(f"\n{'=' * 60}")
+    print(f"Successfully generated {len(generated_charts)} charts")
+    print(f"{'=' * 60}")
+    
+    return generated_charts
+
+
+def send_email_with_charts(**context):
+    """Send email notification with the BMS Progress Tracker report and charts."""
+    excel_file_path = context['task_instance'].xcom_pull(task_ids='generate_bms_report')
+    chart_files = context['task_instance'].xcom_pull(task_ids='generate_charts')
+    
+    email_subject = "[Viaero TEST] BMS Progress Tracker Report with Charts " + str(date.today())
+    
+    # Load logo
+    logo_path = "/home/airflow/airflow/staging_area/samsung png.png"
+    with open(logo_path, "rb") as image_file:
+        logo_data = base64.b64encode(image_file.read()).decode()
+    
+    # Generate HTML content with nice formatting
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: 'Segoe UI', sans-serif;
+                margin: 0;
+                padding: 0;
+                background-color: #f4f4f4;
+            }}
+            .email-container {{
+                width: 100%;
+                max-width: 700px;
+                margin: 0 auto;
+                background-color: #ffffff;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            }}
+            .header {{
+                background-color: #0070C0;
+                padding: 20px;
+                text-align: right;
+            }}
+            .header img {{
+                max-width: 100px;
+            }}
+            .content {{
+                padding: 30px;
+                color: #333;
+                line-height: 1.6;
+            }}
+            .content h3 {{
+                color: #0070C0;
+                font-size: 22px;
+                margin-bottom: 20px;
+            }}
+            .content p {{
+                margin: 20px 0;
+            }}
+            .content ul {{
+                margin: 20px 0;
+                padding-left: 25px;
+            }}
+            .content li {{
+                margin: 10px 0;
+            }}
+            .test-banner {{
+                background-color: #fff3cd;
+                color: #856404;
+                padding: 15px;
+                border-radius: 4px;
+                margin-bottom: 20px;
+                border-left: 4px solid #ffc107;
+                font-weight: bold;
+            }}
+            .footer {{
+                text-align: center;
+                padding: 20px;
+                background-color: #f4f4f4;
+                color: #888;
+                font-size: 14px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="email-container">
+            <div class="header">
+                <img src="data:image/png;base64,{logo_data}" alt="Samsung Logo" />
+            </div>
+            <div class="content">
+                <div class="test-banner">
+                    ⚠️ TEST EMAIL - This is a test of the BMS Report Tracker with charts
+                </div>
+                
+                <h3>Hello,</h3>
+                <p>Please find the BMS Progress Tracker report attached with milestone charts.</p>
+                
+                <p>This test report includes:</p>
+                <ul>
+                    <li>Weekly BMS tracking (All_BMS_W tab)</li>
+                    <li>Monthly BMS tracking (All_BMS_M tab)</li>
+                    <li>BMS group tabs (BMS_1 through BMS_5)</li>
+                    <li>{len(chart_files)} milestone charts (PNG files)</li>
+                </ul>
+                
+                <p><strong>Charts Generated:</strong></p>
+                <ul>
+    """
+    
+    # Add list of charts
+    for chart_file in chart_files:
+        chart_name = os.path.basename(chart_file)
+        html_content += f'                    <li>{chart_name}</li>\n'
+    
+    html_content += """
+                </ul>
+                
+                <p>If you have any questions or feedback on the charts, please let me know.</p>
+                <p>Best regards,<br>Viaero Team</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    # Combine all files for email attachment
+    all_files = [excel_file_path] + chart_files
+    
+    email = EmailOperator(
+        task_id='send_email',
+        to=['l5.lopez@partner.sea.samsung.com'],
+        subject=email_subject,
+        html_content=html_content,
+        files=all_files,
+        mime_charset='utf-8'
+    )
+    
+    email.execute(context)
+
+
+# ============================================================================
+# DAG DEFINITION
+# ============================================================================
+
+local_tz = pendulum.timezone("America/Chicago")
+
+default_args = {
+    'owner': 'l5.lopez',
+    'start_date': datetime(2025, 7, 16, tzinfo=local_tz),
+    'email_on_failure': True,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+    'email': 'l5.lopez@partner.sea.samsung.com'
+}
+
+dag = DAG(
+    'Viaero_BMS_Report_Tracker_test',
+    default_args=default_args,
+    schedule_interval='0 9 * * *',  # Run daily at 9:00 AM CT (1 hour after production)
+    catchup=False,
+    description='TEST DAG: Generate BMS Progress Tracker report with milestone charts',
+    tags=['viaero', 'bms', 'tracker', 'report', 'test', 'charts'],
+)
+
+# Task 1: Generate the BMS report
+generate_report_task = PythonOperator(
+    task_id='generate_bms_report',
+    python_callable=generate_bms_report,
+    dag=dag,
+)
+
+# Task 2: Generate milestone charts
+generate_charts_task = PythonOperator(
+    task_id='generate_charts',
+    python_callable=generate_milestone_charts,
+    provide_context=True,
+    dag=dag,
+)
+
+# Task 3: Send email with report and charts
+send_email_task = PythonOperator(
+    task_id='send_email_task',
+    python_callable=send_email_with_charts,
+    provide_context=True,
+    dag=dag,
+)
+
+# Set task dependencies
+generate_report_task >> generate_charts_task >> send_email_task
+
+print("Viaero_BMS_Report_Tracker_test DAG loaded successfully")
