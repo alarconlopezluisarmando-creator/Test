@@ -1,1 +1,60 @@
-Removed Part: /xl/drawings/drawing1.xml part.  (Drawing shape)
+Replace your format_excel_start_at_b3 and the end of your generate_bms_report with this logic. This code specifically avoids the "Drawing" layer of the Excel file.
+
+
+def safe_inject_to_template(df, sheet_name, target_file):
+    """
+    Surgically places data into the template without touching 
+    the 'Drawing' layer (graphs/shapes).
+    """
+    # Load with data_only=False to keep the charts alive
+    wb = load_workbook(target_file, data_only=False)
+    
+    if sheet_name not in wb.sheetnames:
+        return # Skip if the tab is missing to avoid corruption
+    
+    ws = wb[sheet_name]
+
+    # Convert DataFrame to a list of lists (excluding headers)
+    # We do NOT use dataframe_to_rows here as it can be too 'heavy'
+    data_to_insert = df.values.tolist()
+
+    # LOOP ONLY OVER THE DATA: 
+    # This starts at Row 3, Column 2 (B3) and stops exactly where the data ends.
+    # By NOT looping over the whole sheet, we don't 'bump into' the chart objects.
+    for r_idx, row_data in enumerate(data_to_insert, start=3):
+        for c_idx, value in enumerate(row_data, start=2):
+            # Write only the value, preserving the cell's existing style/anchor
+            if pd.isna(value):
+                ws.cell(row=r_idx, column=c_idx).value = None
+            else:
+                ws.cell(row=r_idx, column=c_idx).value = value
+
+    wb.save(target_file)
+    wb.close()
+
+
+
+In your generate_bms_report, find the section where you save the file and change it to this exact sequence:
+    # --- AT THE VERY END OF generate_bms_report ---
+    timestamp = datetime.now().strftime('%Y%m%d')
+    output_path = f'/opt/airflow/reports/Viaero_BMS_Final_{timestamp}.xlsx'
+    
+    # 1. Copy the Template first (This keeps the graphs 100% healthy)
+    shutil.copy(TEMPLATE_PATH, output_path)
+    
+    # 2. Use the SAFE injection for each tab
+    # Note: We do NOT use .to_excel() anymore!
+    safe_inject_to_template(final_weekly_report, 'All_BMS_W', output_path)
+    safe_inject_to_template(final_monthly_report, 'All_BMS_M', output_path)
+    
+    # 3. Repeat for BMS 1-5 Group tabs
+    for bms_num in range(1, 6):
+        bms_group = f'BMS_{bms_num}'
+        bms_df = filter_by_bms_group(final_weekly_report, bms_group)
+        safe_inject_to_template(bms_df, bms_group, output_path)
+
+    # IMPORTANT: DO NOT call format_excel_start_at_b3() after this.
+    # The formatting should already be inside your Template.xlsx.
+    
+    return output_path
+
