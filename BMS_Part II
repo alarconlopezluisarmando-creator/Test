@@ -1,394 +1,46 @@
-    # Only keep columns that exist in the dataframe
-    columns_to_keep = [col for col in columns_to_keep_all if col in df.columns]
+3. The "Engine" (The New Injection Function)
+Paste this function right after your mapping tables. This is the "Safe-Save" logic that prevents the file corruption:
+
+
+def inject_data_to_template(df, sheet_name, target_file):
+    """Surgically injects data into the template starting at B3."""
+    wb = load_workbook(target_file)
+    if sheet_name not in wb.sheetnames:
+        ws = wb.create_sheet(sheet_name)
+    else:
+        ws = wb[sheet_name]
+
+    # Clean only the data area (B3 downwards)
+    for row in ws.iter_rows(min_row=3, min_col=2):
+        for cell in row:
+            cell.value = None
+
+    # Inject data starting at Row 3, Column 2 (B3)
+    for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=False), 3):
+        for c_idx, value in enumerate(row, 2):
+            ws.cell(row=r_idx, column=c_idx, value=value)
     
-    df = df[columns_to_keep]
-    print(f"Selected {len(columns_to_keep)} columns from data.")
+    wb.save(target_file)
+
+4. The "Action" (Updated generate_bms_report)
+Modify the end of your generate_bms_report function. Delete the pd.ExcelWriter block and replace it with this:
+
+
+    # --- Inside generate_bms_report, at the very end ---
+    timestamp = datetime.now().strftime('%Y%m%d')
+    output_path = f'/opt/airflow/reports/Viaero_BMS_Final_{timestamp}.xlsx'
     
-    # Filter P:Viaero Project Type and P:Viaero Phase
-    df = df[
-        (df['P:Viaero Project Type'].str.contains('H// R&R', na=False)) &
-        (df['P:Viaero Phase'].str.upper() != 'PENDING')
-    ]
-    print(f"Filtered data for H// R&R project types (excluding PENDING phase): {len(df)} rows.")
+    # 1. Start with a fresh copy of your Template (where your graphs live)
+    shutil.copy('/opt/airflow/dags/templates/BMS_Template_With_Graphs.xlsx', output_path)
     
-    # Unpivot the milestone data
-    id_vars = [
-        'P:Viaero Root ID',
-        'C:Site Name (SPMS)',
-        'WPK:Work Package Description',
-        'P:Project ID',
-        'C:Site ID',
-        'P:Viaero Phase',
-        'P:Viaero Project Type',
-        'P:Cluster ID'
-    ]
+    # 2. Inject the data into the specific tabs
+    inject_data_to_template(final_weekly_report, 'All_BMS_W', output_path)
+    inject_data_to_template(final_monthly_report, 'All_BMS_M', output_path)
     
-    milestone_cols = [col for col in df.columns if col.startswith('V:(')]
-    df_unpivoted = df.melt(id_vars=id_vars, value_vars=milestone_cols, var_name='Milestone', value_name='Status')
-    print(f"Unpivoted milestone data: {len(df_unpivoted)} rows.")
-    
-    # Extract and transform milestone information using extract_names() and extract_f_a()
-    print("Applying milestone mapping...")
-    def get_milestone_data(milestone_str):
-        task_name, custom_name = extract_names(milestone_str)
-        fa = extract_f_a(milestone_str)
-        # Get Row_ID using Task Name + F/A lookup (more reliable)
-        task_fa_key = f"{task_name}|{fa}"
-        row_id = TASK_NAME_FA_LOOKUP.get(task_fa_key, 999)
-        return pd.Series([custom_name, fa, task_name, row_id])
-    
-    df_unpivoted[['Custom_Name', 'F/A', 'Task_Name', 'Row_ID']] = df_unpivoted['Milestone'].apply(get_milestone_data)
-    
-    # Prepare data for weekly and monthly reports
-    df_unpivoted['Status'] = pd.to_datetime(df_unpivoted['Status'], errors='coerce')
-    df_unpivoted['Milestone_Count'] = 1
-    
-    # Create weekly column names based on week start date for consistency
-    df_unpivoted['Week_Number'] = df_unpivoted['Status'].dt.isocalendar().week
-    df_unpivoted['ISO_Year'] = df_unpivoted['Status'].dt.isocalendar().year
-    # Get the Monday (start) of each ISO week
-    df_unpivoted['Week_Start'] = df_unpivoted['Status'] - pd.to_timedelta(df_unpivoted['Status'].dt.dayofweek, unit='D')
-    # Get the Sunday (end) of each ISO week
-    df_unpivoted['Week_End'] = df_unpivoted['Week_Start'] + timedelta(days=6)
-    
-    # Create dynamic week labels that show both months if week spans across month/year boundary
-    def get_week_label(week_start, week_end, week_number):
-        month_start = week_start.strftime('%B %Y')
-        month_end = week_end.strftime('%B %Y')
-        if month_start != month_end:
-            # Week spans across month/year boundary
-            return f"{month_start} - {month_end}-Week {week_number}"
-        else:
-            # Week is within one month
-            return f"{month_start}-Week {week_number}"
-    
-    df_unpivoted['Weekly_Column'] = df_unpivoted.apply(
-        lambda row: get_week_label(row['Week_Start'], row['Week_End'], int(row['Week_Number']))
-        if pd.notna(row['Status']) else 'No Date', axis=1
-    )
-    df_unpivoted['Month'] = df_unpivoted['Status'].dt.strftime('%B %Y').fillna('No Date')
-    df_unpivoted['Milestone_Count'] = df_unpivoted['Milestone_Count'].fillna(0)
-    
-    # --- Weekly Report ---
-    print("Generating weekly report...")
-    weekly_pivot = pd.pivot_table(
-        df_unpivoted,
-        values='Milestone_Count',
-        index=['Row_ID', 'Custom_Name', 'F/A', 'Task_Name', 'Milestone'],
-        columns=['Weekly_Column'],
-        aggfunc='sum',
-        fill_value=0
-    )
-    
-    # Generate complete date range for weeks
-    all_week_columns = generate_complete_date_range_columns(df_unpivoted, date_format='week')
-    print(f"Generated {len(all_week_columns)} week columns in date range")
-    
-    # Reindex to include all weeks (fill missing with 0)
-    weekly_pivot = weekly_pivot.reindex(columns=all_week_columns, fill_value=0)
-    
-    final_weekly_report = weekly_pivot.copy()
-    # Weekly columns are already in correct chronological order from generate_complete_date_range_columns()
-    # Don't sort weekly reports to avoid reordering issues with ISO weeks
-    final_weekly_report = add_cumulative_rows_with_row_id(final_weekly_report)
-    final_weekly_report = final_weekly_report.reset_index()
-    
-    # Create sorting columns for proper ordering:
-    # 1. Row_ID (Task Name order)
-    # 2. Is_Cumulative (0=non-cumulative first, 1=cumulative)  
-    # 3. FA_Sort (0=Forecast first, 1=Actual)
-    final_weekly_report['Is_Cumulative'] = final_weekly_report['Custom_Name'].str.contains(r'\(Cumulative\)', regex=True).astype(int)
-    final_weekly_report['FA_Sort'] = (final_weekly_report['F/A'] == 'Actual').astype(int)
-    
-    # Sort by Row_ID, then by Is_Cumulative (non-cum first), then by FA_Sort (Forecast first)
-    # This gives: Forecast (non-cum), Actual (non-cum), Forecast (cum), Actual (cum)
-    final_weekly_report = final_weekly_report.sort_values(['Row_ID', 'Is_Cumulative', 'FA_Sort'])
-    
-    print(f"Row sample after sorting - Row_ID: {final_weekly_report['Row_ID'].head(4).tolist()}, "
-          f"Is_Cumulative: {final_weekly_report['Is_Cumulative'].head(4).tolist()}, "
-          f"FA_Sort: {final_weekly_report['FA_Sort'].head(4).tolist()}")
-    
-    # Reset index after sorting
-    final_weekly_report = final_weekly_report.reset_index(drop=True)
-    
-    # Add Weekly (Category) column based on Custom_Name
-    final_weekly_report['Weekly'] = final_weekly_report['Custom_Name'].apply(get_category)
-    
-    # Rename Custom_Name to Task Name (this is what shows in the Task Name column)
-    final_weekly_report = final_weekly_report.rename(columns={
-        'Custom_Name': 'Task Name'
-    })
-    
-    # Make Weekly appear only once per base Task Name group (without cumulative suffix)
-    # Extract base task name (without "(Cumulative)" suffix)
-    final_weekly_report['Base_Task_Name'] = final_weekly_report['Task Name'].str.replace(' (Cumulative)', '', regex=False)
-    # Mark first row of each base task name group
-    final_weekly_report['Is_First'] = ~final_weekly_report.duplicated(subset=['Base_Task_Name'], keep='first')
-    # Set Weekly to empty for non-first rows
-    final_weekly_report.loc[~final_weekly_report['Is_First'], 'Weekly'] = ''
-    final_weekly_report = final_weekly_report.drop(columns=['Task_Name', 'Row_ID', 'Is_Cumulative', 'FA_Sort', 'Base_Task_Name', 'Is_First'])
-    
-    # Reorder columns to match image: Weekly (WBS), Milestone, F/A, Task Name, then date columns
-    date_cols = [col for col in final_weekly_report.columns if col not in ['Row_ID', 'Custom_Name', 'Weekly', 'F/A', 'Task Name', 'Task_Name', 'Milestone']]
-    final_weekly_report = final_weekly_report[['Weekly', 'Milestone', 'F/A', 'Task Name'] + date_cols]
-    
-    print(f"Weekly report generated: {len(final_weekly_report)} rows, {len(final_weekly_report.columns)} columns.")
-    
-    # --- Monthly Report ---
-    print("Generating monthly report...")
-    monthly_pivot = pd.pivot_table(
-        df_unpivoted,
-        values='Milestone_Count',
-        index=['Row_ID', 'Custom_Name', 'F/A', 'Task_Name', 'Milestone'],
-        columns=['Month'],
-        aggfunc='sum',
-        fill_value=0
-    )
-    
-    # Generate complete date range for months
-    all_month_columns = generate_complete_date_range_columns(df_unpivoted, date_format='month')
-    print(f"Generated {len(all_month_columns)} month columns in date range")
-    
-    # Reindex to include all months (fill missing with 0)
-    monthly_pivot = monthly_pivot.reindex(columns=all_month_columns, fill_value=0)
-    
-    final_monthly_report = sort_columns_by_date(monthly_pivot)
-    final_monthly_report = add_cumulative_rows_with_row_id(final_monthly_report)
-    final_monthly_report = final_monthly_report.reset_index()
-    
-    # Create sorting columns for proper ordering:
-    # 1. Row_ID (Task Name order)
-    # 2. Is_Cumulative (0=non-cumulative first, 1=cumulative)  
-    # 3. FA_Sort (0=Forecast first, 1=Actual)
-    final_monthly_report['Is_Cumulative'] = final_monthly_report['Custom_Name'].str.contains(r'\(Cumulative\)', regex=True).astype(int)
-    final_monthly_report['FA_Sort'] = (final_monthly_report['F/A'] == 'Actual').astype(int)
-    
-    # Sort by Row_ID, then by Is_Cumulative (non-cum first), then by FA_Sort (Forecast first)
-    # This gives: Forecast (non-cum), Actual (non-cum), Forecast (cum), Actual (cum)
-    final_monthly_report = final_monthly_report.sort_values(['Row_ID', 'Is_Cumulative', 'FA_Sort'])
-    
-    print(f"Row sample after sorting - Row_ID: {final_monthly_report['Row_ID'].head(4).tolist()}, "
-          f"Is_Cumulative: {final_monthly_report['Is_Cumulative'].head(4).tolist()}, "
-          f"FA_Sort: {final_monthly_report['FA_Sort'].head(4).tolist()}")
-    
-    # Reset index after sorting
-    final_monthly_report = final_monthly_report.reset_index(drop=True)
-    
-    # Add Weekly (Category) column based on Custom_Name
-    final_monthly_report['Weekly'] = final_monthly_report['Custom_Name'].apply(get_category)
-    
-    # Rename Custom_Name to Task Name (this is what shows in the Task Name column)
-    final_monthly_report = final_monthly_report.rename(columns={
-        'Custom_Name': 'Task Name'
-    })
-    
-    # Make Weekly appear only once per base Task Name group (without cumulative suffix)
-    # Extract base task name (without "(Cumulative)" suffix)
-    final_monthly_report['Base_Task_Name'] = final_monthly_report['Task Name'].str.replace(' (Cumulative)', '', regex=False)
-    # Mark first row of each base task name group
-    final_monthly_report['Is_First'] = ~final_monthly_report.duplicated(subset=['Base_Task_Name'], keep='first')
-    # Set Weekly to empty for non-first rows
-    final_monthly_report.loc[~final_monthly_report['Is_First'], 'Weekly'] = ''
-    final_monthly_report = final_monthly_report.drop(columns=['Task_Name', 'Row_ID', 'Is_Cumulative', 'FA_Sort', 'Base_Task_Name', 'Is_First'])
-    
-    # Reorder columns to match image: Weekly (WBS), Milestone, F/A, Task Name, then date columns
-    month_cols = [col for col in final_monthly_report.columns if col not in ['Custom_Name', 'Weekly', 'F/A', 'Task Name', 'Task_Name', 'Milestone']]
-    final_monthly_report = final_monthly_report[['Weekly', 'Milestone', 'F/A', 'Task Name'] + month_cols]
-    
-    print(f"Monthly report generated: {len(final_monthly_report)} rows, {len(final_monthly_report.columns)} columns.")
-    
-    # --- Generate BMS Group Tabs ---
-    print("Generating BMS group tabs...")
-    bms_tabs = {}
+    # 3. Inject the BMS 1-5 Group tabs
     for bms_num in range(1, 6):
         bms_group = f'BMS_{bms_num}'
-        bms_tabs[bms_group] = filter_by_bms_group(final_weekly_report, bms_group)
-        print(f"{bms_group} tab generated: {len(bms_tabs[bms_group])} rows, {len(bms_tabs[bms_group].columns)} columns")
-    
-    # --- Save to Excel ---
-    timestamp = datetime.now().strftime('%Y%m%d')
-    output_path = f'/opt/airflow/reports/Viaero_BMS_ProgressTracker_NewForecast_{timestamp}.xlsx'
-    
-    print(f"Saving report to: {output_path}")
-    
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        # Main tabs
-        final_weekly_report.to_excel(writer, sheet_name='All_BMS_W', index=False)
-        final_monthly_report.to_excel(writer, sheet_name='All_BMS_M', index=False)
-        # BMS group tabs
-        bms_tabs['BMS_1'].to_excel(writer, sheet_name='BMS_1', index=False)
-        bms_tabs['BMS_2'].to_excel(writer, sheet_name='BMS_2', index=False)
-        bms_tabs['BMS_3'].to_excel(writer, sheet_name='BMS_3', index=False)
-        bms_tabs['BMS_4'].to_excel(writer, sheet_name='BMS_4', index=False)
-        bms_tabs['BMS_5'].to_excel(writer, sheet_name='BMS_5', index=False)
-    
-    # Apply formatting (start at B3, blue header, white text)
-    format_excel_start_at_b3(output_path)
-    print("=" * 60)
-    
+        bms_df = filter_by_bms_group(final_weekly_report, bms_group)
+        inject_data_to_template(bms_df, bms_group, output_path)
+        
     return output_path
-
-
-# --- DAG Definition ---
-
-local_tz = pendulum.timezone("America/Chicago")
-
-default_args = {
-    'owner': 'l5.lopez',
-    'start_date': datetime(2025, 7, 16, tzinfo=local_tz),
-    'email_on_failure': True,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-    'email': 'l5.lopez@partner.sea.samsung.com'
-}
-
-dag = DAG(
-    'Viaero_BMS_Report_Tracker',
-    default_args=default_args,
-    schedule_interval='0 8 * * *',  # Run daily at 8:00 AM CT
-    catchup=False,
-    description='Generate BMS Progress Tracker report with weekly and monthly data',
-    tags=['viaero', 'bms', 'tracker', 'report', 'daily'],
-)
-
-# Task 1: Generate the report
-generate_report_task = PythonOperator(
-    task_id='generate_bms_report',
-    python_callable=generate_bms_report,
-    dag=dag,
-)
-
-
-def send_email(**context):
-    """Send email notification with the BMS Progress Tracker report."""
-    excel_file_path = context['task_instance'].xcom_pull(task_ids='generate_bms_report')
-    email_subject = "[Viaero] BMS Progress Tracker Report " + str(date.today())
-    
-    # Load logo
-    logo_path = "/home/airflow/airflow/staging_area/samsung png.png"
-    with open(logo_path, "rb") as image_file:
-        logo_data = base64.b64encode(image_file.read()).decode()
-    
-    # Generate HTML content with nice formatting
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                font-family: 'Segoe UI', sans-serif;
-                margin: 0;
-                padding: 0;
-                background-color: #f4f4f4;
-            }}
-            .email-container {{
-                width: 100%;
-                max-width: 700px;
-                margin: 0 auto;
-                background-color: #ffffff;
-                border-radius: 8px;
-                overflow: hidden;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            }}
-            .header {{
-                background-color: #0070C0;
-                padding: 20px;
-                text-align: right;
-            }}
-            .header img {{
-                max-width: 100px;
-            }}
-            .content {{
-                padding: 30px;
-                color: #333;
-                line-height: 1.6;
-            }}
-            .content h3 {{
-                color: #0070C0;
-                font-size: 22px;
-                margin-bottom: 20px;
-            }}
-            .content p {{
-                margin: 20px 0;
-            }}
-            .content ul {{
-                margin: 20px 0;
-                padding-left: 25px;
-            }}
-            .content li {{
-                margin: 10px 0;
-            }}
-            .footer {{
-                text-align: center;
-                padding: 20px;
-                background-color: #f4f4f4;
-                color: #888;
-                font-size: 14px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="email-container">
-            <div class="header">
-                <img src="data:image/png;base64,{logo_data}" alt="Samsung Logo" />
-            </div>
-            <div class="content">
-                <h3>Hello Team,</h3>
-                <p>Please find the BMS Progress Tracker report attached.</p>
-                
-                <p>This report includes:</p>
-                <ul>
-                    <li>Weekly BMS tracking (All_BMS_W tab)</li>
-                    <li>Monthly BMS tracking (All_BMS_M tab)</li>
-                    <li>BMS group tabs (BMS_1 through BMS_5)</li>
-                </ul>
-                
-                <p>If you have any questions, feel free to reach out to us at any time.</p>
-                <p>Best regards,<br>Viaero Team</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-    email = EmailOperator(
-        task_id='send_email',
-        to=[
-        'l5.lopez@partner.sea.samsung.com',
-        'j.ferdous1@sea.samsung.com',
-        'a1.magyar@sea.samsung.com',
-        's.himrane@sea.samsung.com',
-        'jreno@sea.samsung.com',
-        'm.marcin@sea.samsung.com',
-        's.wagner@sea.samsung.com',
-        'd.walters@sea.samsung.com',
-        'krishna.c@sea.samsung.com',
-        'd.murphy@sea.samsung.com',
-        'reporting_team@sea.samsung.com',
-        'm.ozel@sea.samsung.com',
-        't.bruso@sea.samsung.com',
-        'e9.walker@partner.sea.samsung.com',
-        'chk.kwak@sea.samsung.com',
-        'kh89.song@sea.samsung.com',
-        'n.sood@sea.samsung.com'
-		 ],
-        subject=email_subject,
-        html_content=html_content,
-        files=[excel_file_path],
-        mime_charset='utf-8'
-    )
-    
-    email.execute(context)
-
-
-# Task 2: Send email notification
-send_email_task = PythonOperator(
-    task_id='send_email_task',
-    python_callable=send_email,
-    provide_context=True,
-    dag=dag,
-)
-
-# Set task dependencies
-generate_report_task >> send_email_task
